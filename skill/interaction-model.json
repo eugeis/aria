@@ -1,0 +1,104 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "eugeis",
+      "intents": [
+        {
+          "name": "PlayMusicIntent",
+          "slots": [
+            { "name": "query", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "play {query}",
+            "play me {query}",
+            "play some {query}",
+            "play the song {query}",
+            "play the album {query}",
+            "play music by {query}",
+            "play {query} music",
+            "put on {query}",
+            "play the station {query}",
+            "play radio {query}",
+            "play station {query}"
+          ]
+        },
+        {
+          "name": "AskIntent",
+          "slots": [
+            { "name": "utterance", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "ask {utterance}",
+            "ask the agent {utterance}",
+            "tell the agent {utterance}",
+            "what do you think about {utterance}"
+          ]
+        },
+        {
+          "name": "ToggleShuffleIntent",
+          "samples": [
+            "shuffle",
+            "shuffle on",
+            "shuffle off",
+            "turn shuffle on",
+            "turn shuffle off",
+            "unshuffle"
+          ]
+        },
+        {
+          "name": "RepeatOneIntent",
+          "samples": [
+            "repeat this song",
+            "repeat one",
+            "repeat the song"
+          ]
+        },
+        {
+          "name": "RepeatAllIntent",
+          "samples": [
+            "repeat all",
+            "repeat everything",
+            "repeat the queue"
+          ]
+        },
+        {
+          "name": "RepeatOffIntent",
+          "samples": [
+            "stop repeating",
+            "repeat off",
+            "turn off repeat"
+          ]
+        },
+        {
+          "name": "SeekIntent",
+          "slots": [
+            { "name": "time", "type": "AMAZON.TIME" }
+          ],
+          "samples": [
+            "jump to {time}",
+            "go to {time}",
+            "seek to {time}",
+            "skip to {time}"
+          ]
+        },
+        { "name": "PlayIntent", "samples": [] },
+        { "name": "PauseIntent", "samples": [] },
+        { "name": "StopIntent", "samples": [] },
+        { "name": "NextIntent", "samples": [] },
+        { "name": "PreviousIntent", "samples": [] },
+        { "name": "ResumeIntent", "samples": [] },
+        { "name": "PlaybackStartedRequest", "samples": [] },
+        { "name": "PlaybackStoppedRequest", "samples": [] },
+        { "name": "PlaybackNearlyFinishedRequest", "samples": [] },
+        { "name": "PlaybackFailedRequest", "samples": [] },
+        { "name": "PlaybackFinishedRequest", "samples": [] },
+        { "name": "AMAZON.HelpIntent" },
+        { "name": "AMAZON.CancelIntent" },
+        { "name": "AMAZON.StopIntent" },
+        { "name": "AMAZON.NextIntent" },
+        { "name": "AMAZON.PreviousIntent" },
+        { "name": "AMAZON.FallbackIntent" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "eugeis-zeroclaw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WebSocket client for the ZeroClaw gateway chat API (/ws/chat) with turn, timeout, and approval bridging."
+rust-version.workspace = true
+
+[dependencies]
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+url = "2"

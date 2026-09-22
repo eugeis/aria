@@ -1,0 +1,55 @@
+[package]
+name = "eugeis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Amazon Alexa voice front-end for the ZeroClaw agent: talk, ask, discuss, and play self-hosted music through your Echo."
+repository = "https://github.com/eugeis/eugeis"
+rust-version.workspace = true
+
+[dependencies]
+eugeis-alexa = { path = "crates/eugeis-alexa" }
+eugeis-audio = { path = "crates/eugeis-audio" }
+eugeis-zeroclaw = { path = "crates/eugeis-zeroclaw" }
+
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "fs", "signal"] }
+axum = { version = "0.8", features = ["http1", "json", "tokio"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+http = "1"
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "http1", "http2"] }
+rustls = { version = "0.23", features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+tokio-rustls = { version = "0.26", features = ["ring"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+bytes = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.9"
+url = "2"
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/eugeis-alexa",
+    "crates/eugeis-audio",
+    "crates/eugeis-zeroclaw",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

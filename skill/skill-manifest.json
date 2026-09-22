@@ -1,0 +1,26 @@
+{
+  "manifest": {
+    "manifestVersion": "1.0",
+    "publishingInformation": {
+      "locales": {
+        "en-US": {
+          "name": "Eugeis",
+          "summary": "Talk to your ZeroClaw agent and play self-hosted music.",
+          "description": "Eugeis turns your Alexa into a voice front-end for the ZeroClaw personal AI assistant. Ask questions, discuss things, let the agent act, and play your own music library or internet radio. Everything runs on your hardware.",
+          "smallIconUri": "https://REPLACE-WITH-YOUR-DOMAIN/skill-icons/icon-108.png",
+          "largeIconUri": "https://REPLACE-WITH-YOUR-DOMAIN/skill-icons/icon-512.png"
+        }
+      }
+    },
+    "apis": {
+      "custom": {
+        "endpoint": {
+          "uri": "https://REPLACE-WITH-YOUR-DOMAIN/alexa"
+        },
+        "interfaces": [
+          { "type": "AUDIO_PLAYER" }
+        ]
+      }
+    }
+  }
+}

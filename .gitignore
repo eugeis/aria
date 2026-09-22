@@ -1,0 +1,6 @@
+/target
+Cargo.lock.bak
+*.log
+.env
+.eugeis/
+dist/
