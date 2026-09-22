@@ -96,16 +96,19 @@ async fn stream_file(
         }
     };
     let len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    // Skip a leading ID3v2 tag: it is metadata, not audio, and both the
+    // ms->byte seek math and the Echo's Range offsets are relative to the
+    // first audio byte.
+    let tag_skip = id3_tag_size(&file).await;
     // Milliseconds -> bytes at the average bitrate (MP3 is frame-aligned, so
     // a few frames of slack at the seek point are inaudible).
     let byte_start = offset_ms
         .saturating_mul(avg_bitrate_kbps as u64)
-        .saturating_div(1000)
-        .min(len);
-    let start = parse_range_start(headers)
+        .saturating_div(1000);
+    let start_rel = parse_range_start(headers)
         .map(|n| n.max(byte_start))
-        .unwrap_or(byte_start)
-        .min(len);
+        .unwrap_or(byte_start);
+    let start = tag_skip.saturating_add(start_rel).min(len);
     let body = Body::from_stream(FileStream::new(
         BufReader::with_capacity(256 * 1024, file),
         start,
@@ -195,6 +198,27 @@ pub async fn handle_health(State(state): State<Arc<AppState>>) -> impl IntoRespo
     }))
 }
 
+/// Size in bytes of a leading ID3v2 tag, or 0 if the file has none.
+async fn id3_tag_size(file: &File) -> u64 {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let mut f = match file.try_clone().await {
+        Ok(f) => f,
+        Err(_) => return 0,
+    };
+    if f.seek(SeekFrom::Start(0)).await.is_err() {
+        return 0;
+    }
+    let mut head = [0u8; 10];
+    if f.read(&mut head).await.unwrap_or(0) < 10 || &head[0..3] != b"ID3" {
+        return 0;
+    }
+    // Synchsafe (7-bit) size at bytes 6..10; +10 for the tag header itself.
+    10 + (((head[6] as u64 & 0x7f) << 21)
+        | ((head[7] as u64 & 0x7f) << 14)
+        | ((head[8] as u64 & 0x7f) << 7)
+        | (head[9] as u64 & 0x7f))
+}
+
 fn parse_range_start(headers: &HeaderMap) -> Option<u64> {
     let v = headers.get(header::RANGE)?.to_str().ok()?;
     // "bytes=12345-"
@@ -207,6 +231,9 @@ fn parse_range_start(headers: &HeaderMap) -> Option<u64> {
 struct FileStream {
     reader: BufReader<File>,
     start: u64,
+    /// `start_seek` was issued; a `poll_complete` must follow before any
+    /// other operation (tokio's two-phase seek).
+    seeking: bool,
     initialized: bool,
     buf: Vec<u8>,
 }
@@ -216,6 +243,7 @@ impl FileStream {
         Self {
             reader,
             start,
+            seeking: false,
             initialized: false,
             buf: vec![0u8; 256 * 1024],
         }
@@ -229,16 +257,24 @@ impl Stream for FileStream {
         let this = self.get_mut();
         if !this.initialized {
             // BufReader has no seek; seek the inner file (buffer is empty here).
-            if let Err(e) = Pin::new(this.reader.get_mut()).start_seek(SeekFrom::Start(this.start))
-            {
-                return Poll::Ready(Some(Err(e)));
+            if !this.seeking {
+                if let Err(e) =
+                    Pin::new(this.reader.get_mut()).start_seek(SeekFrom::Start(this.start))
+                {
+                    return Poll::Ready(Some(Err(e)));
+                }
+                this.seeking = true;
             }
             match ready!(Pin::new(this.reader.get_mut()).poll_complete(cx)) {
-                Ok(_) => this.initialized = true,
+                Ok(_) => {
+                    this.initialized = true;
+                    this.seeking = false;
+                }
                 Err(e) => return Poll::Ready(Some(Err(e))),
             }
         }
-        this.buf.clear();
+        // ReadBuf::new sizes its capacity to the slice length, so the buffer
+        // must keep its full length (never truncate/clear between polls).
         let mut rb = ReadBuf::new(&mut this.buf);
         let filled = match ready!(Pin::new(&mut this.reader).poll_read(cx, &mut rb)) {
             Ok(()) => rb.filled().len(),
@@ -262,5 +298,84 @@ impl Stream for RadioStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use futures_util::TryStreamExt;
+
+    #[tokio::test]
+    async fn file_stream_reads_all_bytes_from_offset() {
+        let dir = std::env::temp_dir().join("aria_fs_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t.bin");
+        let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&p, &data).unwrap();
+        let file = tokio::fs::File::open(&p).await.unwrap();
+        let mut s = FileStream::new(BufReader::with_capacity(64 * 1024, file), 100);
+        let mut got = Vec::new();
+        while let Some(chunk) = s.try_next().await.unwrap() {
+            got.extend_from_slice(&chunk);
+        }
+        assert_eq!(got.len(), data.len() - 100, "byte count");
+        assert_eq!(got, data[100..], "content");
+    }
+
+    #[tokio::test]
+    async fn file_stream_zero_offset() {
+        let dir = std::env::temp_dir().join("aria_fs_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t0.bin");
+        let data: Vec<u8> = vec![7u8; 500_000];
+        std::fs::write(&p, &data).unwrap();
+        let file = tokio::fs::File::open(&p).await.unwrap();
+        let mut s = FileStream::new(BufReader::with_capacity(256 * 1024, file), 0);
+        let mut got = Vec::new();
+        while let Some(chunk) = s.try_next().await.unwrap() {
+            got.extend_from_slice(&chunk);
+        }
+        assert_eq!(got, data);
+    }
+}
+
+#[cfg(test)]
+mod id3_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn detects_id3v2_tag() {
+        let dir = std::env::temp_dir().join("aria_fs_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("tagged.mp3");
+        let mut tag = b"ID3\x03\x00\x00".to_vec();
+        let n: u64 = 40;
+        tag.extend_from_slice(
+            &[
+                (n >> 21) & 0x7f,
+                (n >> 14) & 0x7f,
+                (n >> 7) & 0x7f,
+                n & 0x7f,
+            ]
+            .map(|b| b as u8),
+        );
+        tag.extend(std::iter::repeat_n(0u8, 40));
+        tag.extend_from_slice(b"\xff\xfb\x90\xc0");
+        std::fs::write(&p, tag).unwrap();
+        let f = tokio::fs::File::open(&p).await.unwrap();
+        assert_eq!(id3_tag_size(&f).await, 50);
+    }
+
+    #[tokio::test]
+    async fn no_tag_is_zero() {
+        let dir = std::env::temp_dir().join("aria_fs_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("plain.mp3");
+        let mut raw = b"\xff\xfb\x90\xc0".to_vec();
+        raw.extend(std::iter::repeat_n(0u8, 32));
+        std::fs::write(&p, raw).unwrap();
+        let f = tokio::fs::File::open(&p).await.unwrap();
+        assert_eq!(id3_tag_size(&f).await, 0);
     }
 }

@@ -139,9 +139,9 @@ pub struct Slot {
     pub value: Option<String>,
     #[serde(default)]
     pub values: Option<Vec<String>>,
-    #[serde(default)]
-    #[serde(rename = "resolutionStatus")]
-    pub resolution_status: Option<String>,
+    /// ASK sends an object here: `{"status":"SUCCESS","value":{...}}`.
+    #[serde(default, rename = "resolutionStatus")]
+    pub resolution_status: Option<Value>,
     #[serde(default)]
     #[serde(rename = "confirmationStatus")]
     pub confirmation_status: Option<String>,
