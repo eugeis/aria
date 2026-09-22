@@ -2,5 +2,5 @@
 Cargo.lock.bak
 *.log
 .env
-.eugeis/
+.aria/
 dist/

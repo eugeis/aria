@@ -2,10 +2,10 @@
 
 use crate::request::Envelope;
 
-/// Everything the eugeis router can do, derived from the raw ASK request.
+/// Everything the aria router can do, derived from the raw ASK request.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IntentKind {
-    /// "Alexa, open eugeis"
+    /// "Alexa, open aria"
     Launch,
     /// User said stop/cancel or the session ended.
     SessionEnded,
@@ -18,7 +18,7 @@ pub enum IntentKind {
     Fallback {
         utterance: Option<String>,
     },
-    /// Explicit "ask eugeis <question>" style request.
+    /// Explicit "ask aria <question>" style request.
     Ask {
         utterance: String,
     },
@@ -104,7 +104,7 @@ impl IntentKind {
             "AMAZON.FallbackIntent" => IntentKind::Fallback {
                 utterance: env.slot("utterance").map(str::to_string),
             },
-            // eugeis custom intents.
+            // aria custom intents.
             "PlayMusicIntent" => IntentKind::PlayMusic {
                 query: env.slot("query").map(str::to_string),
             },

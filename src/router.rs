@@ -3,9 +3,9 @@
 
 use std::time::Instant;
 
-use eugeis_alexa::{Envelope, IntentKind, Response, ResponseBuilder, audio_item};
-use eugeis_audio::{Library, Repeat, StreamSource, search};
-use eugeis_zeroclaw::{AgentError, Decision};
+use aria_alexa::{Envelope, IntentKind, Response, ResponseBuilder, audio_item};
+use aria_audio::{Library, Repeat, StreamSource, search};
+use aria_zeroclaw::{AgentError, Decision};
 use std::sync::Arc;
 
 use crate::state::{AppState, PendingApproval};
@@ -18,7 +18,7 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
 
     match kind {
         IntentKind::Launch => ResponseBuilder::new()
-            .say("Eugeis is ready. Say play some music, or ask me anything.")
+            .say("Aria is ready. Say play some music, or ask me anything.")
             .end_session()
             .build(),
         IntentKind::SessionEnded | IntentKind::SystemRequest => {
@@ -71,7 +71,7 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
         IntentKind::Fallback { utterance } => match utterance {
             Some(u) => handle_agent_turn(state, &device, &u).await,
             None => ResponseBuilder::new()
-                .say("I didn't catch that. Say ask eugeis plus your question, or play some music.")
+                .say("I didn't catch that. Say ask aria plus your question, or play some music.")
                 .end_session()
                 .build(),
         },
@@ -194,7 +194,7 @@ pub fn parse_decision(utterance: &str) -> Option<Decision> {
     None
 }
 
-fn approval_summary(info: &eugeis_zeroclaw::ApprovalInfo) -> String {
+fn approval_summary(info: &aria_zeroclaw::ApprovalInfo) -> String {
     let base = if info.summary.trim().is_empty() {
         format!("the {} tool wants to run", info.tool)
     } else {
@@ -268,7 +268,7 @@ fn eq_norm(a: &str, b: &str) -> bool {
     a.to_ascii_lowercase() == b.trim()
 }
 
-fn named_tracks<F: Fn(&eugeis_audio::Track) -> bool>(lib: &Library, pred: F) -> Option<Vec<u64>> {
+fn named_tracks<F: Fn(&aria_audio::Track) -> bool>(lib: &Library, pred: F) -> Option<Vec<u64>> {
     let ids: Vec<u64> = lib
         .iter()
         .filter(|t| t.playable && pred(t))
@@ -288,7 +288,7 @@ fn shuffle_of(state: &AppState, device: &str) -> bool {
 fn shuffled(mut ids: Vec<u64>) -> Vec<u64> {
     if ids.len() > 1 {
         let mut rng = rand::rng();
-        eugeis_audio::library::shuffle_in_place(&mut ids, &mut rng);
+        aria_audio::library::shuffle_in_place(&mut ids, &mut rng);
     }
     ids
 }
@@ -514,7 +514,7 @@ fn handle_play_noquery(state: &Arc<AppState>, device: &str, env: &Envelope) -> R
 }
 
 /// (token, offset) from AudioPlayer context, for expected* stream fields.
-fn ap_context_expected(ap: &eugeis_alexa::request::AudioPlayerContext) -> Option<(&str, u64)> {
+fn ap_context_expected(ap: &aria_alexa::request::AudioPlayerContext) -> Option<(&str, u64)> {
     ap.token
         .as_deref()
         .filter(|t| !t.is_empty())
@@ -713,7 +713,7 @@ fn match_radio(radio: &crate::config::RadioConfig, q: &str) -> Option<(String, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eugeis_alexa::intent::IntentKind;
+    use aria_alexa::intent::IntentKind;
 
     fn env(json: &str) -> Envelope {
         serde_json::from_str(json).unwrap()

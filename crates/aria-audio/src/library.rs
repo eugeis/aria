@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn scan_missing_root_is_empty() {
-        let lib = Library::scan(&[PathBuf::from("/nonexistent-eugeis-test")]).unwrap();
+        let lib = Library::scan(&[PathBuf::from("/nonexistent-aria-test")]).unwrap();
         assert!(lib.is_empty());
     }
 }

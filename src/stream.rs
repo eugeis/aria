@@ -9,12 +9,12 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use aria_audio::StreamSource;
+use aria_audio::registry::looks_like_token;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use eugeis_audio::StreamSource;
-use eugeis_audio::registry::looks_like_token;
 use futures_util::Stream;
 use std::sync::Arc;
 use tokio::fs::File;
@@ -31,7 +31,7 @@ pub async fn handle_alexa(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
         .unwrap_or_default();
-    match serde_json::from_slice::<eugeis_alexa::Envelope>(&bytes) {
+    match serde_json::from_slice::<aria_alexa::Envelope>(&bytes) {
         Ok(env) => {
             // Client-id check (prevents other skills hitting this endpoint).
             if let (Some(want), Some(got)) =
@@ -39,7 +39,7 @@ pub async fn handle_alexa(
             {
                 if got != want {
                     tracing::warn!(got, want, "rejected request from wrong skill");
-                    let resp = eugeis_alexa::Response::empty();
+                    let resp = aria_alexa::Response::empty();
                     return (StatusCode::OK, axum::Json(resp.to_json())).into_response();
                 }
             }
@@ -50,7 +50,7 @@ pub async fn handle_alexa(
             tracing::debug!(%e, headers = ?headers.get(header::USER_AGENT), "unparseable /alexa request");
             (
                 StatusCode::OK,
-                axum::Json(eugeis_alexa::Response::empty().to_json()),
+                axum::Json(aria_alexa::Response::empty().to_json()),
             )
                 .into_response()
         }
@@ -83,7 +83,7 @@ pub async fn handle_stream(
 
 async fn stream_file(
     path: &str,
-    format: eugeis_audio::Format,
+    format: aria_audio::Format,
     offset_ms: u64,
     avg_bitrate_kbps: u32,
     headers: &HeaderMap,
@@ -123,7 +123,7 @@ async fn stream_radio(url: String) -> Response {
     let client = reqwest::Client::new();
     let upstream = match client
         .get(&url)
-        .header(header::USER_AGENT, "eugeis/0.1 (Alexa music bridge)")
+        .header(header::USER_AGENT, "aria/0.1 (Alexa music bridge)")
         .send()
         .await
     {

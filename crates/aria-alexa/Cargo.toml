@@ -1,15 +1,11 @@
 [package]
-name = "eugeis-audio"
+name = "aria-alexa"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Self-hosted music engine: library scan, search, per-device player state, playback tokens."
+description = "Amazon Alexa Skills Kit (ASK) v1 protocol types, intent classification, and response builders."
 rust-version.workspace = true
 
 [dependencies]
-lofty = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2"
-rand = "0.9"
-tracing = "0.1"

@@ -1,8 +1,8 @@
-# Reverse proxy in front of eugeis: automatic Let's Encrypt TLS, HSTS.
+# Reverse proxy in front of aria: automatic Let's Encrypt TLS, HSTS.
 #   caddy adapt  -> Caddyfile check
 #   caddy run --config /etc/caddy/Caddyfile
 
-eugeis.example.com {
+aria.example.com {
     encode gzip zstd
     reverse_proxy 127.0.0.1:8080
 }

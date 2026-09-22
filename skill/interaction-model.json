@@ -1,7 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
-      "invocationName": "eugeis",
+      "invocationName": "aria",
       "intents": [
         {
           "name": "PlayMusicIntent",

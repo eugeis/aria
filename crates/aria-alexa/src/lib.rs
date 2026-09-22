@@ -1,4 +1,4 @@
-//! eugeis-alexa — ASK v1 protocol types, intent classification, responses, SSML.
+//! aria-alexa — ASK v1 protocol types, intent classification, responses, SSML.
 
 pub mod intent;
 pub mod request;

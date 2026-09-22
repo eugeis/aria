@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
-use eugeis_audio::{Library, PlaybackRegistry, PlayerState};
-use eugeis_zeroclaw::ApprovalInfo;
+use aria_audio::{Library, PlaybackRegistry, PlayerState};
+use aria_zeroclaw::ApprovalInfo;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentBackend;
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn state_roundtrips() {
-        let dir = std::env::temp_dir().join(format!("eugeis-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("aria-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let st = test_state(&dir);
         {

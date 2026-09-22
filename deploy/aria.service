@@ -1,0 +1,21 @@
+[Unit]
+Description=aria - Alexa voice front-end for ZeroClaw
+After=network-online.target zeroclaw.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=z000ru5y
+Environment=ARIA_DATA_DIR=/home/z000ru5y/.aria
+# Environment=ARIA_ZC_TOKEN=***
+ExecStart=/home/z000ru5y/.cargo/bin/aria --config /home/z000ru5y/.aria/config.toml
+Restart=on-failure
+RestartSec=5
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/z000ru5y/.aria /srv/music
+
+[Install]
+WantedBy=multi-user.target

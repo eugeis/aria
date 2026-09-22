@@ -1,20 +1,20 @@
-# eugeis — example configuration.
-# Copy to ~/.eugeis/config.toml and adjust. Every key has a built-in default;
+# aria — example configuration.
+# Copy to ~/.aria/config.toml and adjust. Every key has a built-in default;
 # only what you need must be present.
 
 [server]
 # Bind address for the HTTP(S) listener.
 bind = "0.0.0.0:8080"
 # Public https URL that Amazon and Echo devices use (your domain behind Caddy,
-# or eugeis's own TLS). Stream URLs are built from this.
-public_base_url = "https://eugeis.example.com"
+# or aria's own TLS). Stream URLs are built from this.
+public_base_url = "https://aria.example.com"
 # Alexa skill client id (amzn1.ask.skill....). When set, requests from other
 # skills are rejected.
 client_id = "amzn1.ask.skill.00000000-0000-4000-8000-000000000000"
-# Native TLS (optional; otherwise terminate TLS in front of eugeis, e.g. Caddy).
-# tls_cert = "/etc/letsencrypt/live/eugeis.example.com/fullchain.pem"
-# tls_key  = "/etc/letsencrypt/live/eugeis.example.com/privkey.pem"
-# data_dir = "~/.eugeis"
+# Native TLS (optional; otherwise terminate TLS in front of aria, e.g. Caddy).
+# tls_cert = "/etc/letsencrypt/live/aria.example.com/fullchain.pem"
+# tls_key  = "/etc/letsencrypt/live/aria.example.com/privkey.pem"
+# data_dir = "~/.aria"
 
 [library]
 # Folders scanned recursively for MP3/AAC (FLAC is indexed but not streamed
@@ -26,7 +26,7 @@ rescan_secs = 3600
 [zeroclaw]
 # ZeroClaw gateway base URL (same box: ws://127.0.0.1:<gateway port>).
 gateway = "ws://127.0.0.1:3000"
-# Bearer token for the gateway; may come from $EUGEIS_ZC_TOKEN instead.
+# Bearer token for the gateway; may come from $ARIA_ZC_TOKEN instead.
 # token = "change-me"
 # Agent alias in zeroclaw's config to talk to. Use a lightweight agent with a
 # fast model for low voice latency.

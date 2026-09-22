@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use eugeis_zeroclaw::{AgentError, AgentEvent, Decision, GatewayConfig, TurnOutcome, ZeroClaw};
+use aria_zeroclaw::{AgentError, AgentEvent, Decision, GatewayConfig, TurnOutcome, ZeroClaw};
 use tokio::sync::broadcast;
 
 use crate::config::Config;

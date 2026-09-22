@@ -1,4 +1,4 @@
-# eugeis
+# aria
 
 **Amazon Alexa as the voice front-end for your [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) agent.**
 
@@ -11,7 +11,7 @@ from your hardware, in Rust, with no ffmpeg, no mpd, no external daemons.
    Echo device ──────────────────────────────── Amazon
         │  transcripts in / SSML out
         ▼
-   eugeis (this project)          ZeroClaw gateway (ws://…/ws/chat)
+   aria (this project)          ZeroClaw gateway (ws://…/ws/chat)
    ┌─────────────────────┐  WS   ┌──────────────────────────┐
    │ /alexa  (ASK v1)    │──────▶│ agent loop: memory,      │
    │ /stream (music)     │       │ tools, security, SOPs    │
@@ -20,12 +20,12 @@ from your hardware, in Rust, with no ffmpeg, no mpd, no external daemons.
 ```
 
 - **Amazon is the ears and mouth.** The Echo transcribes your voice and speaks
-  whatever eugeis returns as SSML. No STT/TTS engines in the box, and the
+  whatever aria returns as SSML. No STT/TTS engines in the box, and the
   audio path Amazon handles is the fastest one available.
-- **ZeroClaw is the brain.** eugeis keeps a persistent WebSocket to the
+- **ZeroClaw is the brain.** aria keeps a persistent WebSocket to the
   gateway's `/ws/chat` endpoint, so every question goes through the same
   agent, memory, tools, and security policy as your other channels. When the
-  agent asks for tool approval, eugeis voices the prompt
+  agent asks for tool approval, aria voices the prompt
   ("ZeroClaw needs your approval: the shell tool wants to run… say yes") and
   forwards your answer back.
 - **Music stays self-hosted.** A pure-Rust library scanner (`lofty`) indexes
@@ -38,7 +38,7 @@ from your hardware, in Rust, with no ffmpeg, no mpd, no external daemons.
 
 | Utterance | What happens |
 |---|---|
-| "Alexa, ask eugeis what's the weather" | Forwarded to the ZeroClaw agent; answer spoken |
+| "Alexa, ask aria what's the weather" | Forwarded to the ZeroClaw agent; answer spoken |
 | "Alexa, <anything unmatched>" | Fallback → agent (when ASK provides the transcript) |
 | "play bohemian rhapsody" / "play dark side of the moon" / "play queen" / "play jazz" | Song / album / artist / genre from your library |
 | "play rock fm" | Radio preset from config |
@@ -53,10 +53,10 @@ Rust workspace, four crates:
 
 | Crate | Role |
 |---|---|
-| `eugeis-alexa` | ASK v1 protocol types, intent classification, response/SSML builders |
-| `eugeis-audio` | Library scan (`lofty`), search, per-device player state, playback tokens |
-| `eugeis-zeroclaw` | Gateway WS client: turns with timeout, partial-reply degradation, approval bridging |
-| `eugeis` (root) | axum server: `/alexa`, `/stream/{token}`, `/art/{id}`, `/health`; config; TLS |
+| `aria-alexa` | ASK v1 protocol types, intent classification, response/SSML builders |
+| `aria-audio` | Library scan (`lofty`), search, per-device player state, playback tokens |
+| `aria-zeroclaw` | Gateway WS client: turns with timeout, partial-reply degradation, approval bridging |
+| `aria` (root) | axum server: `/alexa`, `/stream/{token}`, `/art/{id}`, `/health`; config; TLS |
 
 Design notes and trade-offs: [`docs/architecture.md`](docs/architecture.md).
 
@@ -75,19 +75,19 @@ zeroclaw service install && zeroclaw service start
 Note the gateway URL/port and create a gateway token
 (`zeroclaw` dashboard → settings, or the config).
 
-### 2. eugeis (the voice)
+### 2. aria (the voice)
 
 ```bash
-git clone https://github.com/eugeis/eugeis
-cd eugeis
+git clone https://github.com/aria/aria
+cd aria
 cargo build --release
 
-mkdir -p ~/.eugeis
-cp config/eugeis.example.toml ~/.eugeis/config.toml
+mkdir -p ~/.aria
+cp config/aria.example.toml ~/.aria/config.toml
 # edit: public_base_url, client_id, library paths, zeroclaw gateway/alias/token
-export EUGEIS_ZC_TOKEN="***"   # or put it in config
+export ARIA_ZC_TOKEN="***"   # or put it in config
 
-./target/release/eugeis
+./target/release/aria
 ```
 
 In mock mode (`zeroclaw.mock = true`) it runs without ZeroClaw and echoes
@@ -106,7 +106,7 @@ Alexa calls your skill over HTTPS from the internet. Either:
 ### 4. Amazon developer account
 
 1. [Create a skill](https://developer.amazon.com/alexa/console/ask) →
-   *Custom* → name `Eugeis`.
+   *Custom* → name `Aria`.
 2. Import [`skill/interaction-model.json`](skill/interaction-model.json)
    (skill builder → *Import from file*). The manifest
    [`skill/skill-manifest.json`](skill/skill-manifest.json) already enables
@@ -115,20 +115,20 @@ Alexa calls your skill over HTTPS from the internet. Either:
 4. Copy the **Client ID** (`amzn1.ask.skill.…`) into
    `server.client_id` in config.
 5. Test mode: add your Amazon account to *Test Accounts*, say
-   **"Alexa, ask eugeis hello"**.
+   **"Alexa, ask aria hello"**.
 
 ### 5. Run it as a service
 
-[`deploy/eugeis.service`](deploy/eugeis.service) is a systemd unit
+[`deploy/aria.service`](deploy/aria.service) is a systemd unit
 (adjust paths).
 
 ## Configuration
 
-See [`config/eugeis.example.toml`](config/eugeis.example.toml) — every key
-is documented there. Environment overrides: `EUGEIS_CONFIG`,
-`EUGEIS_ZC_TOKEN`, `EUGEIS_GATEWAY`, `EUGEIS_PUBLIC_URL`, `RUST_LOG`.
+See [`config/aria.example.toml`](config/aria.example.toml) — every key
+is documented there. Environment overrides: `ARIA_CONFIG`,
+`ARIA_ZC_TOKEN`, `ARIA_GATEWAY`, `ARIA_PUBLIC_URL`, `RUST_LOG`.
 
-State (per-device queues, position) persists in `~/.eugeis/state.json`.
+State (per-device queues, position) persists in `~/.aria/state.json`.
 
 ## Music library
 

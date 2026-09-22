@@ -1,4 +1,4 @@
-//! eugeis-zeroclaw — ZeroClaw gateway WebSocket client (chat turns + approvals).
+//! aria-zeroclaw — ZeroClaw gateway WebSocket client (chat turns + approvals).
 
 pub mod client;
 pub mod protocol;

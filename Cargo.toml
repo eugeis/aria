@@ -1,16 +1,16 @@
 [package]
-name = "eugeis"
+name = "aria"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Amazon Alexa voice front-end for the ZeroClaw agent: talk, ask, discuss, and play self-hosted music through your Echo."
-repository = "https://github.com/eugeis/eugeis"
+repository = "https://github.com/aria/aria"
 rust-version.workspace = true
 
 [dependencies]
-eugeis-alexa = { path = "crates/eugeis-alexa" }
-eugeis-audio = { path = "crates/eugeis-audio" }
-eugeis-zeroclaw = { path = "crates/eugeis-zeroclaw" }
+aria-alexa = { path = "crates/aria-alexa" }
+aria-audio = { path = "crates/aria-audio" }
+aria-zeroclaw = { path = "crates/aria-zeroclaw" }
 
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "fs", "signal"] }
 axum = { version = "0.8", features = ["http1", "json", "tokio"] }
@@ -38,9 +38,9 @@ url = "2"
 [workspace]
 resolver = "2"
 members = [
-    "crates/eugeis-alexa",
-    "crates/eugeis-audio",
-    "crates/eugeis-zeroclaw",
+    "crates/aria-alexa",
+    "crates/aria-audio",
+    "crates/aria-zeroclaw",
 ]
 
 [workspace.package]

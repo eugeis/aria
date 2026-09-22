@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context as _;
+use aria_audio::Library;
 use axum::Router;
 use axum::routing::get;
-use eugeis_audio::Library;
 use tracing_subscriber::EnvFilter;
 
 mod agent;
@@ -16,7 +16,7 @@ mod state;
 mod stream;
 
 use agent::{AgentBackend, MockAgent, ZeroClawAgent};
-use eugeis_zeroclaw::AgentEvent;
+use aria_zeroclaw::AgentEvent;
 use state::PendingApproval;
 
 fn main() -> anyhow::Result<()> {
@@ -42,7 +42,7 @@ fn parse_args() -> Option<PathBuf> {
             "-c" | "--config" => config_path = args.next().map(PathBuf::from),
             "-h" | "--help" => {
                 println!(
-                    "eugeis — Alexa voice front-end for ZeroClaw\n\nusage: eugeis [OPTIONS]\n\noptions:\n  -c, --config <PATH>   config file (default: ~/.eugeis/config.toml)\n  -h, --help            show help\n\nenv:\n  EUGEIS_CONFIG         config file path\n  EUGEIS_ZC_TOKEN       ZeroClaw gateway bearer token\n  EUGEIS_GATEWAY        gateway base url (ws://host:port)\n  EUGEIS_PUBLIC_URL     public https base url for stream links\n  RUST_LOG              log filter"
+                    "aria — Alexa voice front-end for ZeroClaw\n\nusage: aria [OPTIONS]\n\noptions:\n  -c, --config <PATH>   config file (default: ~/.aria/config.toml)\n  -h, --help            show help\n\nenv:\n  ARIA_CONFIG         config file path\n  ARIA_ZC_TOKEN       ZeroClaw gateway bearer token\n  ARIA_GATEWAY        gateway base url (ws://host:port)\n  ARIA_PUBLIC_URL     public https base url for stream links\n  RUST_LOG              log filter"
                 );
                 std::process::exit(0);
             }
@@ -59,7 +59,7 @@ async fn run(cfg: config::Config) -> anyhow::Result<()> {
     if cfg.server.public_base_url.trim().is_empty() && !cfg.zeroclaw.mock {
         tracing::warn!(
             "server.public_base_url is empty; Echo devices cannot reach /stream links. \
-             Set it to your public https URL (e.g. https://eugeis.example.com)."
+             Set it to your public https URL (e.g. https://aria.example.com)."
         );
     }
 
@@ -161,7 +161,7 @@ async fn run(cfg: config::Config) -> anyhow::Result<()> {
         .with_context(|| format!("bad server.bind: {}", cfg.server.bind))?;
 
     let has_tls = cfg.server.tls_cert.is_some() && cfg.server.tls_key.is_some();
-    println!("eugeis starting");
+    println!("aria starting");
     println!(
         "  listen       : {addr}{}",
         if has_tls { " (TLS)" } else { "" }

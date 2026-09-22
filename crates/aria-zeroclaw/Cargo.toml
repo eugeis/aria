@@ -1,5 +1,5 @@
 [package]
-name = "eugeis-zeroclaw"
+name = "aria-zeroclaw"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

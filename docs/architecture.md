@@ -9,17 +9,17 @@ model doesn't cover:
 1. **An always-on inbound HTTPS endpoint** that Amazon calls (JSON in, JSON
    out), with its own session semantics (skill sessions, device context).
 2. **A raw audio streaming server**: `AudioPlayer` directives point Echo
-   devices at stream URLs that eugeis must serve (chunked HTTP, Range
+   devices at stream URLs that aria must serve (chunked HTTP, Range
    resume, expected-token validation).
 3. **A device-facing state machine**: queue/position/shuffle/repeat per
    device, playback tokens, player reports (`PlaybackStarted/…`).
 
-So eugeis is a separate Rust service that owns the Alexa protocol and the
+So aria is a separate Rust service that owns the Alexa protocol and the
 audio plane, and delegates *thinking* to ZeroClaw through its documented
 gateway WebSocket API (`GET /ws/chat`). ZeroClaw stays unmodified and can
-follow upstream; eugeis is the thin, swappable voice front.
+follow upstream; aria is the thin, swappable voice front.
 
-### The WS contract (as implemented in `eugeis-zeroclaw`)
+### The WS contract (as implemented in `aria-zeroclaw`)
 
 - Connect: `ws://host/ws/chat?agent_alias=<alias>&session_id=alexa-<device>&token=<bearer>`
   (subprotocol `zeroclaw.v1`; bearer also accepted via header/query).
@@ -40,7 +40,7 @@ Amazon's edge:
 
 - In: ASK sends the **transcript** in the `IntentRequest`. No Whisper/local
   STT in the box.
-- Out: eugeis returns `outputSpeech` (SSML); Amazon TTS speaks it. No Piper/
+- Out: aria returns `outputSpeech` (SSML); Amazon TTS speaks it. No Piper/
   ElevenLabs in the box.
 
 What crosses the wire to ZeroClaw is a text turn — the same as any other
@@ -51,7 +51,7 @@ zero cost, zero config).
 ## The 8-second rule
 
 ASK requires the skill endpoint to respond within ~8 s or the Echo times
-out. A full LLM turn can exceed that, so `eugeis-zeroclaw` runs each turn
+out. A full LLM turn can exceed that, so `aria-zeroclaw` runs each turn
 under `turn_timeout_ms` (default 7500, clamped ≤ 7900):
 
 - **Done in time** → speak `full_response`.
@@ -68,25 +68,25 @@ fast model and a short system prompt — latency is a config decision.
 
 ZeroClaw's security model gates risky tool calls behind approvals. On the
 gateway WS those surface as `approval_request` frames; the reply is an
-`approval_response` on the same socket. eugeis maps that onto voice turns:
+`approval_response` on the same socket. aria maps that onto voice turns:
 
 ```
 turn N:   user: "restart the web server"
           agent → approval_request(shell: systemctl restart …)
-          eugeis → "ZeroClaw needs your approval: the shell tool wants to
+          aria → "ZeroClaw needs your approval: the shell tool wants to
                     run 'systemctl restart…'. Say yes to allow it."
 turn N+1: user: "yes"
-          eugeis → approval_response(approve) → "Approved. I'll tell you when
+          aria → approval_response(approve) → "Approved. I'll tell you when
                     it's done."
           agent finishes in background → late `done`
 turn N+2: user: anything (agent turn)
-          eugeis speaks the cached late reply first, then the new answer.
+          aria speaks the cached late reply first, then the new answer.
 ```
 
 State lives in `AppState.approvals` (device → pending) and
 `AppState.cached_reply` (device → late reply). While a turn waits for an
 approval, further agent turns on that device are refused by the gateway's
-per-session queue — eugeis answers "there's a pending approval, say yes or
+per-session queue — aria answers "there's a pending approval, say yes or
 no" instead.
 
 ## Music engine
@@ -118,7 +118,7 @@ no" instead.
   `server.client_id` (other skills hitting the URL get a silent end).
 - Stream URLs are unguessable tokens; art URLs are bounded by track id.
 - The ZeroClaw bearer token stays local (env or config, never in logs).
-- TLS: Caddy in front (recommended) or native rustls in eugeis.
+- TLS: Caddy in front (recommended) or native rustls in aria.
 - Hardened systemd unit provided.
 
 ## Failure modes
@@ -127,7 +127,7 @@ no" instead.
 |---|---|
 | ZeroClaw down | WS reconnects with backoff; agent turns report "can't reach ZeroClaw" after 10 s |
 | Turn hangs | `STALE_TURN_AFTER` (5 min) frees the slot; per-turn timeout bounds user wait |
-| Approval timeout (gateway side) | Gateway auto-denies; eugeis's pending prompt becomes stale on the next decision |
-| Music file deleted mid-play | Stream 404s → Echo fires `PlaybackFailedRequest` → eugeis advances the queue |
+| Approval timeout (gateway side) | Gateway auto-denies; aria's pending prompt becomes stale on the next decision |
+| Music file deleted mid-play | Stream 404s → Echo fires `PlaybackFailedRequest` → aria advances the queue |
 | Library rescan | Atomic swap of the `Arc<RwLock<Library>>`; in-flight streams keep their file handles |
-| eugeis restarts | Queues/position restored from `state.json`; old stream tokens expire (TTL) |
+| aria restarts | Queues/position restored from `state.json`; old stream tokens expire (TTL) |

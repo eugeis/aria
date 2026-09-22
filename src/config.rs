@@ -47,7 +47,7 @@ pub struct LibraryConfig {
 pub struct ZeroclawConfig {
     /// Gateway base URL, e.g. ws://127.0.0.1:3000
     pub gateway: String,
-    /// Bearer token; defaults to $EUGEIS_ZC_TOKEN.
+    /// Bearer token; defaults to $ARIA_ZC_TOKEN.
     pub token: Option<String>,
     /// ZeroClaw agent alias used for voice turns.
     pub agent_alias: String,
@@ -147,19 +147,19 @@ impl Config {
 }
 
 pub fn default_data_dir() -> PathBuf {
-    std::env::var_os("EUGEIS_DATA_DIR")
+    std::env::var_os("ARIA_DATA_DIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".eugeis")))
-        .unwrap_or_else(|| PathBuf::from(".eugeis"))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".aria")))
+        .unwrap_or_else(|| PathBuf::from(".aria"))
 }
 
 /// Load config from an explicit path, or the default location, or built-in
 /// defaults when no file exists. Environment overrides:
-///   EUGEIS_CONFIG, EUGEIS_ZC_TOKEN, EUGEIS_GATEWAY, EUGEIS_PUBLIC_URL
+///   ARIA_CONFIG, ARIA_ZC_TOKEN, ARIA_GATEWAY, ARIA_PUBLIC_URL
 pub fn load(explicit: Option<&Path>) -> std::result::Result<Config, ConfigError> {
     let path = explicit
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("EUGEIS_CONFIG").map(PathBuf::from))
+        .or_else(|| std::env::var_os("ARIA_CONFIG").map(PathBuf::from))
         .unwrap_or_else(default_config_path);
     let cfg = if path.exists() {
         let raw = std::fs::read_to_string(&path).map_err(|e| ConfigError::Read {
@@ -183,17 +183,17 @@ pub fn default_config_path() -> PathBuf {
 }
 
 fn apply_env(mut cfg: Config) -> Config {
-    if let Ok(t) = std::env::var("EUGEIS_ZC_TOKEN") {
+    if let Ok(t) = std::env::var("ARIA_ZC_TOKEN") {
         if !t.is_empty() {
             cfg.zeroclaw.token = Some(t);
         }
     }
-    if let Ok(g) = std::env::var("EUGEIS_GATEWAY") {
+    if let Ok(g) = std::env::var("ARIA_GATEWAY") {
         if !g.is_empty() {
             cfg.zeroclaw.gateway = g;
         }
     }
-    if let Ok(u) = std::env::var("EUGEIS_PUBLIC_URL") {
+    if let Ok(u) = std::env::var("ARIA_PUBLIC_URL") {
         if !u.is_empty() {
             cfg.server.public_base_url = u;
         }
@@ -244,7 +244,7 @@ mod tests {
         let toml = r#"
             [server]
             bind = "127.0.0.1:9000"
-            public_base_url = "https://eugeis.example/"
+            public_base_url = "https://aria.example/"
             client_id = "amzn1.ask.skill.x"
             [library]
             paths = ["/music"]
@@ -260,7 +260,7 @@ mod tests {
         "#;
         let c: Config = toml::from_str(toml).unwrap();
         assert_eq!(c.server.bind, "127.0.0.1:9000");
-        assert_eq!(c.base_url(), "https://eugeis.example");
+        assert_eq!(c.base_url(), "https://aria.example");
         assert_eq!(c.library.paths, vec![PathBuf::from("/music")]);
         assert_eq!(c.zeroclaw.agent_alias, "home");
         assert_eq!(

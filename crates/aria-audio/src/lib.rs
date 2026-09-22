@@ -1,4 +1,4 @@
-//! eugeis-audio — self-hosted music engine (no ffmpeg, no external daemons).
+//! aria-audio — self-hosted music engine (no ffmpeg, no external daemons).
 
 pub mod library;
 pub mod player;
