@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy-test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --release
+
+  smoke:
+    # End-to-end: run the real binary against a synthetic library and drive
+    # it with real ASK v1 requests (launch, play, stream the token).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Fixtures (synthetic silent MP3s + config)
+        run: |
+          python3 - <<'EOF'
+          import os
+          frame = b'\xff\xfb\x90\xc0' + b'\x00' * 413  # MPEG-1 L3 128kbps 44.1k mono
+          os.makedirs('/tmp/aria-ci/music', exist_ok=True)
+          for name in ('CI Test - Alpha.mp3', 'CI Test - Beta.mp3'):
+              open(f'/tmp/aria-ci/music/{name}', 'wb').write(frame * 200)
+          EOF
+          cat > /tmp/aria-ci/config.toml <<'EOF'
+          [server]
+          bind = "127.0.0.1:8123"
+          public_base_url = "http://127.0.0.1:8123"
+          data_dir = "/tmp/aria-ci"
+          [library]
+          paths = ["/tmp/aria-ci/music"]
+          rescan_secs = 0
+          [zeroclaw]
+          mock = true
+          [radio]
+          stations = {}
+          [logging]
+          level = "info"
+          EOF
+      - name: Run server + ASK round-trip
+        run: |
+          ARIA_CONFIG=/tmp/aria-ci/config.toml ./target/release/aria > /tmp/aria-ci/server.log 2>&1 &
+          SERVER=$!
+          trap 'kill $SERVER 2>/dev/null' EXIT
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8123/health > /dev/null && break || sleep 0.5
+          done
+          curl -sf http://127.0.0.1:8123/health | grep -q '"ok":true'
+          echo "health ok"
+
+          RESP=$(curl -sf -X POST http://127.0.0.1:8123/alexa -H 'content-type: application/json' -d '{
+            "version": "1.0",
+            "session": {"new": true, "sessionId": "s1",
+              "application": {"applicationId": "ci"}, "user": {"userId": "u"}},
+            "context": {"System": {"device": {"deviceId": "ci-device"}}},
+            "request": {"type": "IntentRequest", "requestId": "r1", "locale": "en-US",
+              "intent": {"name": "PlayMusicIntent",
+                "slots": {"query": {"name": "query", "value": "alpha",
+                  "resolutionStatus": {"status": "SUCCESS"}}}}}
+          }')
+          echo "$RESP"
+          echo "$RESP" | grep -q 'AudioPlayer.Play'
+
+          TOKEN=*** "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin)['response']['directives'][0]['audioItem']['stream']['token'])")
+          URL=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin)['response']['directives'][0]['audioItem']['stream']['url'])")
+          BYTES=$(curl -sf "$URL" | wc -c)
+          echo "streamed $BYTES bytes with token $TOKEN"
+          [ "$BYTES" -gt 50000 ]
+          RANGE_BYTES=$(curl -sf -H 'Range: bytes=10000-' "$URL" | wc -c)
+          echo "range resume: $RANGE_BYTES bytes"
+          [ "$RANGE_BYTES" -eq $((BYTES - 10000)) ]

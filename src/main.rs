@@ -42,7 +42,7 @@ fn parse_args() -> Option<PathBuf> {
             "-c" | "--config" => config_path = args.next().map(PathBuf::from),
             "-h" | "--help" => {
                 println!(
-                    "aria — Alexa voice front-end for ZeroClaw\n\nusage: aria [OPTIONS]\n\noptions:\n  -c, --config <PATH>   config file (default: ~/.aria/config.toml)\n  -h, --help            show help\n\nenv:\n  ARIA_CONFIG         config file path\n  ARIA_ZC_TOKEN       ZeroClaw gateway bearer token\n  ARIA_GATEWAY        gateway base url (ws://host:port)\n  ARIA_PUBLIC_URL     public https base url for stream links\n  RUST_LOG              log filter"
+                    "aria — Alexa voice front-end for ZeroClaw\n\nusage: aria [OPTIONS]\n\noptions:\n  -c, --config <PATH>   config file (default: ~/.aria/config.toml)\n  -h, --help            show help\n\nenv:\n  ARIA_CONFIG         config file path\n  ARIA_DATA_DIR       state directory (default ~/.aria)\n  ARIA_ZC_TOKEN       ZeroClaw gateway bearer token\n  ARIA_GATEWAY        gateway base url (ws://host:port)\n  ARIA_PUBLIC_URL     public https base url for stream links\n  RUST_LOG              log filter"
                 );
                 std::process::exit(0);
             }

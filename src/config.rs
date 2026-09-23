@@ -155,7 +155,7 @@ pub fn default_data_dir() -> PathBuf {
 
 /// Load config from an explicit path, or the default location, or built-in
 /// defaults when no file exists. Environment overrides:
-///   ARIA_CONFIG, ARIA_ZC_TOKEN, ARIA_GATEWAY, ARIA_PUBLIC_URL
+///   ARIA_CONFIG, ARIA_DATA_DIR, ARIA_ZC_TOKEN, ARIA_GATEWAY, ARIA_PUBLIC_URL
 pub fn load(explicit: Option<&Path>) -> std::result::Result<Config, ConfigError> {
     let path = explicit
         .map(PathBuf::from)
