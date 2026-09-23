@@ -245,7 +245,7 @@ sudo systemctl enable --now aria
 journalctl -u aria -f
 ```
 
-The unit uses `Environment=ARIA_ZC_TOKEN=*** — the only secret you
+The unit sets `Environment=ARIA_ZC_TOKEN` to the gateway bearer token — the only secret you
 should put outside the TOML.
 
 ### 7. Say it

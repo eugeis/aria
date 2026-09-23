@@ -87,10 +87,10 @@ jobs:
           echo "$RESP"
           echo "$RESP" | grep -q 'AudioPlayer.Play'
 
-          TOKEN=*** "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin)['response']['directives'][0]['audioItem']['stream']['token'])")
+          STREAM_TK=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin)['response']['directives'][0]['audioItem']['stream']['token'])")
           URL=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin)['response']['directives'][0]['audioItem']['stream']['url'])")
           BYTES=$(curl -sf "$URL" | wc -c)
-          echo "streamed $BYTES bytes with token $TOKEN"
+          echo "streamed $BYTES bytes with token $STREAM_TK"
           [ "$BYTES" -gt 50000 ]
           RANGE_BYTES=$(curl -sf -H 'Range: bytes=10000-' "$URL" | wc -c)
           echo "range resume: $RANGE_BYTES bytes"
