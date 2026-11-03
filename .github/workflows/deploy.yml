@@ -1,0 +1,271 @@
+# Manual deploy of the Aria app (brain + ASK sidecar) to li7.
+#
+#   Repo: eugeis/aria   (this repo)
+#   What it does:
+#     1. renders the brain through the pinned mosaic generator
+#     2. builds + imports both images into k3s:
+#          mosaic/aria:<sha>      (the rendered brain)
+#          mosaic/aria-ask:<sha>  (the hand-written ASK surface)
+#     3. injects the li7-only glue (aria-ask sidecar, media hostPath,
+#        service ports, ingress path split) into the rendered helm chart
+#     4. creates the namespace + secrets (values from files on the runner —
+#        see deploy/li7/SECRETS.md)
+#     5. helm upgrade --install + the hostPath strategic-merge patch
+#        (data + vector on ext4 host paths — LanceDB cannot commit on exFAT)
+#
+# Prereqs on li7 (see deploy/li7/SECRETS.md):
+#   /var/lib/aria-data      ext4 host dir (brain corpus + persist seam + sqlite)
+#   /var/lib/aria-lancedb   ext4 host dir (the LanceDB vector store)
+#   /var/lib/aria-media     the audio collections (music / bible-audio / sermons-audio)
+#   the secret files under /home/ee/.ssh/ (aria-*)
+
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: The aria branch/SHA to deploy
+        required: true
+        default: main
+      chat_base_url:
+        description: Override the brain's LLM base URL (empty = the tessera registry value; on li7 this is the reverse-SSH tunnel to the vLLM box, e.g. http://127.0.0.1:8902/v1)
+        required: false
+        default: ""
+      host_data_path:
+        description: Host path (POSIX fs) mounted at /data in both containers
+        required: false
+        default: "/var/lib/aria-data"
+      vector_data_path:
+        description: Host path (POSIX fs — NOT exFAT) mounted at /vector (the LanceDB store)
+        required: false
+        default: "/var/lib/aria-lancedb"
+
+concurrency:
+  group: onprem-aria
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  KUBECONFIG: /home/ee/.kube/config
+  # Keep in lockstep with .github/workflows/ci.yml (the pinned generator).
+  MOSAIC_REV: 6ad1b49e8cd3e8d2ee95805bde18e67b8dc58aad
+  NAMESPACE: aria
+  RELEASE: aria
+  HOST: aria.eisler-systems.de
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, k3s, li7, mosaic-onprem]
+    environment: onprem
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Resolve the image tag
+        id: imagetag
+        run: echo "tag=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out mosaic @ pinned rev
+        uses: actions/checkout@v4
+        with:
+          repository: eugeis/mosaic
+          ref: ${{ env.MOSAIC_REV }}
+          path: .mosaic
+          fetch-depth: 1
+          token: ${{ secrets.MOSAIC_ONPREM_PAT }}
+
+      - name: Activate the stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify the on-prem toolchain
+        run: |
+          set -euo pipefail
+          cargo --version
+          docker --version
+          helm version --short
+          kubectl cluster-info
+          command -v k3s
+
+      - name: Build mosaic
+        working-directory: .mosaic
+        run: cargo build -p mosaic-cli --release
+
+      - name: Render the aria app
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/aria-rendered"
+          .mosaic/target/release/mosaic build . -o "$RUNNER_TEMP/aria-rendered"
+          test -f "$RUNNER_TEMP/aria-rendered/deploy/li7/Dockerfile"
+          test -f "$RUNNER_TEMP/aria-rendered/deploy/li7/helm/Chart.yaml"
+
+      - name: Build and import the brain image into k3s
+        env:
+          IMAGE: "mosaic/aria:${{ steps.imagetag.outputs.tag }}"
+        run: |
+          set -euo pipefail
+          # The generated Dockerfile ships a bare debian-slim; curl is needed
+          # for the post-rollout in-pod smoke check (idempotent guard).
+          grep -q "ca-certificates curl" "$RUNNER_TEMP/aria-rendered/deploy/li7/Dockerfile" \
+            || sed -i 's/--no-install-recommends ca-certificates \\/--no-install-recommends ca-certificates curl \\/' \
+               "$RUNNER_TEMP/aria-rendered/deploy/li7/Dockerfile"
+          docker build \
+            -f "$RUNNER_TEMP/aria-rendered/deploy/li7/Dockerfile" \
+            -t "$IMAGE" \
+            "$RUNNER_TEMP/aria-rendered"
+          docker save "$IMAGE" | sudo k3s ctr images import -
+
+      - name: Build and import the ASK sidecar image into k3s
+        env:
+          IMAGE: "mosaic/aria-ask:${{ steps.imagetag.outputs.tag }}"
+        run: |
+          set -euo pipefail
+          docker build -f adapter/Dockerfile -t "$IMAGE" adapter/
+          docker save "$IMAGE" | sudo k3s ctr images import -
+
+      - name: Inject the li7 glue into the rendered chart
+        run: |
+          set -euo pipefail
+          python3 deploy/li7/inject-sidecars.py \
+            "$RUNNER_TEMP/aria-rendered/deploy/li7/helm" \
+            "${{ steps.imagetag.outputs.tag }}"
+
+      - name: Create the namespace + secrets
+        run: |
+          set -uo pipefail
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          # One secret per declared env var: name = the env var lowercased,
+          # dots/underscores to dashes; key = the env var. Values come from
+          # files on the runner (see deploy/li7/SECRETS.md) — never from the
+          # repo. A missing file warns (the surface fails soft), never fails
+          # the deploy.
+          declare -A FILES=(
+            [MOAIC_JWT_SECRET]=/home/ee/.ssh/aria-jwt-secret
+            [MOAIC_ADMIN_PASSWORD]=/home/ee/.ssh/aria-admin-password
+            [MOAIC_ADAPTER_TOKEN]=/home/ee/.ssh/aria-adapter-token
+            [MOAIC_CHAT_API_KEY]=/home/ee/.ssh/aria-chat-key
+            [MOAIC_MCP_BIBLE_AUTH]=/home/ee/.ssh/bible-reader-token
+          )
+          for VAR in "${!FILES[@]}"; do
+            f="${FILES[$VAR]}"
+            if [ -f "$f" ]; then
+              VAL=$(tr -d '[:space:]' < "$f")
+              name=$(printf '%s' "$VAR" | tr 'A-Z_' 'a-z-')
+              kubectl -n "$NAMESPACE" create secret generic "$name" \
+                --from-literal="$VAR=$VAL" --dry-run=client -o yaml \
+                | kubectl apply -n "$NAMESPACE" -f -
+            else
+              echo "::warning::no $VAR at $f — the matching surface stays off"
+            fi
+          done
+
+      - name: Apply the cert-manager Certificate
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/cert.yaml" <<CERT
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: ${HOST//./-}-tls
+            namespace: $NAMESPACE
+          spec:
+            secretName: ${HOST//./-}-tls
+            issuerRef:
+              name: letsencrypt-prod
+              kind: ClusterIssuer
+            dnsNames:
+              - $HOST
+          CERT
+          kubectl apply -f "$RUNNER_TEMP/cert.yaml"
+
+      - name: Deploy the Helm chart
+        env:
+          CHART: "$RUNNER_TEMP/aria-rendered/deploy/li7/helm"
+          IMAGE: "mosaic/aria:${{ steps.imagetag.outputs.tag }}"
+          HOST_DATA_PATH: ${{ inputs.host_data_path }}
+          VECTOR_DATA_PATH: ${{ inputs.vector_data_path }}
+          CHAT_BASE_URL: ${{ inputs.chat_base_url }}
+        run: |
+          set -euo pipefail
+          chat_args=()
+          if [ -n "$CHAT_BASE_URL" ]; then
+            chat_args+=(--set "env.MOAIC_CHAT_BASE_URL=$CHAT_BASE_URL")
+          fi
+          helm upgrade --install "$RELEASE" "$CHART" \
+            --namespace "$NAMESPACE" \
+            --create-namespace \
+            --set image.repository="${IMAGE%:*}" \
+            --set image.tag="${IMAGE##*:}" \
+            --set image.pullPolicy=Never \
+            --set dataPvc.enabled=false \
+            --set "env.MOAIC_DB_PATH=/data/app.db" \
+            --set "env.MOSAIC_VECTOR_BACKEND=lancedb" \
+            --set "env.MOSAIC_VECTOR_URL=/data/lancedb" \
+            "${chat_args[@]}"
+          # The rendered chart has no PVC (dataPvc off) — the persistent
+          # state is hostPath-mounted. The strategic-merge patch (a) adds the
+          # host volumes, (b) mounts /data in BOTH containers (the brain
+          # ingests knowledge/media from it; the adapter publishes the scan
+          # there) and /vector in the brain (LanceDB must be on a POSIX fs —
+          # its commit protocol linkat's, exFAT silently fails), re-applying
+          # it after EVERY helm upgrade (an upgrade reverts it).
+          cat > "$RUNNER_TEMP/host-patch.json" <<JSON
+          {
+            "spec": {
+              "template": {
+                "spec": {
+                  "volumes": [
+                    { "name": "host-data", "hostPath": { "path": "$HOST_DATA_PATH", "type": "Directory" } },
+                    { "name": "host-vector", "hostPath": { "path": "$VECTOR_DATA_PATH", "type": "Directory" } }
+                  ],
+                  "containers": [
+                    {
+                      "name": "aria",
+                      "volumeMounts": [
+                        { "name": "host-data", "mountPath": "/data" },
+                        { "name": "host-vector", "mountPath": "/vector" }
+                      ]
+                    },
+                    {
+                      "name": "aria-ask",
+                      "volumeMounts": [
+                        { "name": "host-data", "mountPath": "/data" }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+          JSON
+          kubectl -n "$NAMESPACE" patch deployment "$RELEASE" --type=strategic --patch "$(cat "$RUNNER_TEMP/host-patch.json")"
+          # The brain's env must point the vector store at /vector (the
+          # helm --set above targeted /data/lancedb; the last-set env wins,
+          # so patch the container env too — same reversion reason as the
+          # volumes).
+          kubectl -n "$NAMESPACE" set env "deployment/$RELEASE" \
+            -c aria MOSAIC_VECTOR_URL=/vector
+
+      - name: Wait for the rollout + status
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" rollout status "deployment/$RELEASE" --timeout=1800s
+          kubectl -n "$NAMESPACE" get deployment,service,ingress
+          kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/name=aria -o wide
+
+      - name: Smoke: the ASK surface answers
+        run: |
+          set -uo pipefail
+          # The skill endpoint must answer Amazon's test envelope with 200.
+          code=$(kubectl -n "$NAMESPACE" exec "deploy/$RELEASE" -c aria-ask -- \
+            curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"version":"1.0","request":{"type":"LaunchRequest","requestId":"smoke"}}' \
+            http://127.0.0.1:8090/alexa || true)
+          echo "ask /alexa answered: ${code:-?}"
+          [ "$code" = "200" ] || echo "::warning::/alexa did not answer 200"
+          code=$(kubectl -n "$NAMESPACE" exec "deploy/$RELEASE" -c aria -- \
+            curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/readyz || true)
+          echo "brain /readyz answered: ${code:-?} (503 = still booting the corpus)"

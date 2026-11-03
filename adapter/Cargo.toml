@@ -1,19 +1,22 @@
 [package]
-name = "aria"
+name = "aria-ask"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Amazon Alexa voice front-end for the ZeroClaw agent: talk, ask, discuss, and play self-hosted music through your Echo."
+description = "The ASK surface of the Aria voice assistant: the Alexa Skills Kit protocol, self-hosted audio streaming, and the brain bridge to the Aria Mosaic app."
 repository = "https://github.com/eugeis/aria"
 rust-version.workspace = true
+
+[[bin]]
+name = "aria-ask"
+path = "src/main.rs"
 
 [dependencies]
 aria-alexa = { path = "crates/aria-alexa" }
 aria-audio = { path = "crates/aria-audio" }
-aria-zeroclaw = { path = "crates/aria-zeroclaw" }
 
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "fs", "signal"] }
-axum = { version = "0.8", features = ["http1", "json", "tokio"] }
+axum = { version = "0.8", features = ["http1", "json", "tokio", "macros"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
@@ -25,7 +28,7 @@ tokio-rustls = { version = "0.26", features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 bytes = "1"
 anyhow = "1"
@@ -34,13 +37,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.9"
 url = "2"
+flate2 = "1"
+crc32fast = "1"
 
 [workspace]
 resolver = "2"
 members = [
     "crates/aria-alexa",
     "crates/aria-audio",
-    "crates/aria-zeroclaw",
 ]
 
 [workspace.package]

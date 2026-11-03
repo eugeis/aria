@@ -1,14 +1,13 @@
 //! Intent router: maps classified ASK intents to audio-engine actions or
-//! ZeroClaw agent turns.
+//! brain (Aria Mosaic app) turns.
 
-use std::time::Instant;
-
-use aria_alexa::{Envelope, IntentKind, Response, ResponseBuilder, audio_item};
-use aria_audio::{Library, Repeat, StreamSource, search};
-use aria_zeroclaw::{AgentError, Decision};
 use std::sync::Arc;
 
-use crate::state::{AppState, PendingApproval};
+use aria_alexa::{Envelope, IntentKind, Response, ResponseBuilder, audio_item};
+use aria_audio::{CollectionKind, Library, Repeat, StreamSource, search, slugify};
+
+use crate::agent::{AgentError, ResolveOutcome};
+use crate::state::AppState;
 
 /// Entry point for every request from Amazon.
 pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
@@ -28,23 +27,35 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
         }
         IntentKind::Help => ResponseBuilder::new()
             .say(
-                "You can say: play a song, album, artist, or genre. Play radio plus a station name. \
-                 Play, pause, stop, next, previous, or jump to a time. Shuffle, repeat this song, or \
-                 repeat all. And you can just ask me a question — ZeroClaw will answer.",
+                "You can say: play a song, album, artist, or genre. Play an audiobook, or say \
+                 continue plus the book to resume it. Play radio plus a station name. \
+                 Play, pause, stop, next, previous, or jump to a time. Shuffle, repeat this song, \
+                 or repeat all. And you can just ask me a question — I will answer.",
             )
             .end_session()
             .build(),
-        IntentKind::Cancel => ResponseBuilder::new().say("Okay, bye.").end_session().build(),
+        IntentKind::Cancel => ResponseBuilder::new()
+            .say("Okay, bye.")
+            .end_session()
+            .build(),
 
         IntentKind::PlayMusic { query } => handle_play_music(state, &device, query).await,
         IntentKind::Play => handle_play_noquery(state, &device, &env),
         IntentKind::Pause => {
             state.save_state();
-            ResponseBuilder::new().say("Paused.").pause_audio().end_session().build()
+            ResponseBuilder::new()
+                .say("Paused.")
+                .pause_audio()
+                .end_session()
+                .build()
         }
         IntentKind::Stop => {
             stop_device(state, &device);
-            ResponseBuilder::new().say("Stopped.").stop_audio().end_session().build()
+            ResponseBuilder::new()
+                .say("Stopped.")
+                .stop_audio()
+                .end_session()
+                .build()
         }
         IntentKind::Next => handle_next(state, &device, &env).await,
         IntentKind::Previous => handle_previous(state, &device, &env),
@@ -63,7 +74,9 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
 
         IntentKind::ToggleShuffle => handle_shuffle(state, &device),
         IntentKind::RepeatOne => set_repeat(state, &device, Repeat::One, "Repeating this song."),
-        IntentKind::RepeatAll => set_repeat(state, &device, Repeat::All, "Repeating the whole queue."),
+        IntentKind::RepeatAll => {
+            set_repeat(state, &device, Repeat::All, "Repeating the whole queue.")
+        }
         IntentKind::RepeatOff => set_repeat(state, &device, Repeat::Off, "Repeat off."),
         IntentKind::Seek { offset_ms } => handle_seek(state, &device, offset_ms),
 
@@ -82,135 +95,28 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
     }
 }
 
-// ── Agent turns ────────────────────────────────────────────────────────────
+// ── Brain turns ────────────────────────────────────────────────────────────
 
 async fn handle_agent_turn(state: &Arc<AppState>, device: &str, utterance: &str) -> Response {
-    // A late reply from the previous turn is spoken first.
-    let cached = state.take_cached_reply(device);
-
-    // Pending tool approval? Yes/no handles it; anything else reminds.
-    if let Some(p) = state.pending_approval(device) {
-        match parse_decision(utterance) {
-            Some(d) => {
-                let ok = state
-                    .agent
-                    .respond_approval(device, &p.info.request_id, d)
-                    .is_ok();
-                state.set_pending_approval(device, None);
-                let msg = match (d, ok) {
-                    (Decision::Deny, _) => "Denied.",
-                    (_, true) => "Approved. I'll tell you when it's done.",
-                    (_, false) => {
-                        "I couldn't forward that approval. The agent will decide on its own timeout."
-                    }
-                };
-                return ResponseBuilder::new().say(msg).end_session().build();
-            }
-            None => {
-                return ResponseBuilder::new()
-                    .say(format!(
-                        "ZeroClaw is waiting for your approval: {}. Say yes to allow it, or no to deny it.",
-                        approval_summary(&p.info),
-                    ))
-                    .end_session()
-                    .build();
-            }
-        }
-    }
-
     let timeout = state.cfg.turn_timeout();
     match state.agent.ask(device, utterance, timeout).await {
         Ok(outcome) => {
-            if let Some(approval) = outcome.awaiting_approval {
-                // The event collector may already have registered this; keep
-                // the newest.
-                state.set_pending_approval(
-                    device,
-                    Some(PendingApproval {
-                        info: approval.clone(),
-                        asked_at: Instant::now(),
-                    }),
-                );
-                return ResponseBuilder::new()
-                    .say(format!(
-                        "ZeroClaw needs your approval: {}. Say yes to allow it, or no to deny it.",
-                        approval_summary(&approval),
-                    ))
-                    .end_session()
-                    .build();
-            }
-            let base = outcome.full.clone().unwrap_or_else(|| {
-                if outcome.partial.trim().is_empty() {
-                    "That's taking longer than I can say in one go. Try again in a moment."
-                        .to_string()
-                } else {
-                    // Timeout with partial text: speak what we have.
-                    outcome.partial.clone()
-                }
-            });
-            let text = match cached {
-                Some(c) if !c.trim().is_empty() => format!("{c} {base}"),
-                _ => base,
-            };
+            let text = outcome
+                .text
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| {
+                    "I got an empty answer. Try asking it a different way.".to_string()
+                });
             ResponseBuilder::new().say(&text).end_session().build()
         }
-        Err(AgentError::Busy) => ResponseBuilder::new()
-            .say("I'm still working on the previous request. Give me a moment, then try again.")
-            .end_session()
-            .build(),
         Err(AgentError::Connect(_)) => ResponseBuilder::new()
-            .say("I can't reach the ZeroClaw agent right now. Check that it is running.")
+            .say("I can't reach my brain right now. Check that the Aria service is running.")
             .end_session()
             .build(),
         Err(_) => ResponseBuilder::new()
-            .say("The agent hit an error. Try again in a moment.")
+            .say("The brain hit an error. Try again in a moment.")
             .end_session()
             .build(),
-    }
-}
-
-/// Classify a yes/no/always answer to an approval prompt.
-pub fn parse_decision(utterance: &str) -> Option<Decision> {
-    let u = utterance.trim().to_ascii_lowercase();
-    let words: Vec<&str> = u.split_whitespace().collect();
-    let last = words.last().copied().unwrap_or("");
-    let first = words.first().copied().unwrap_or("");
-    if u.contains("always") {
-        return Some(Decision::Always);
-    }
-    let positive = [
-        "yes", "yep", "yeah", "yup", "sure", "ok", "okay", "allow", "approve", "go", "ja", "bitte",
-        "please",
-    ];
-    let negative = [
-        "no", "nope", "nah", "deny", "denied", "negative", "nein", "stop",
-    ];
-    if positive.contains(&last) || positive.contains(&first) && words.len() <= 3 {
-        return Some(Decision::Approve);
-    }
-    if negative.contains(&last) || negative.contains(&first) && words.len() <= 3 {
-        return Some(Decision::Deny);
-    }
-    None
-}
-
-fn approval_summary(info: &aria_zeroclaw::ApprovalInfo) -> String {
-    let base = if info.summary.trim().is_empty() {
-        format!("the {} tool wants to run", info.tool)
-    } else {
-        format!("the {} tool: {}", info.tool, info.summary)
-    };
-    truncate_at_word(&base, 160)
-}
-
-fn truncate_at_word(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let cut: String = s.chars().take(max).collect();
-    match cut.rfind(' ') {
-        Some(p) => cut[..p].to_string(),
-        None => cut,
     }
 }
 
@@ -218,43 +124,280 @@ fn truncate_at_word(s: &str, max: usize) -> String {
 
 async fn handle_play_music(state: &Arc<AppState>, device: &str, query: Option<String>) -> Response {
     let q = match query {
-        Some(q) if !q.trim().is_empty() => q.trim().to_ascii_lowercase(),
+        Some(q) if !q.trim().is_empty() => q.trim().to_string(),
         _ => return handle_play_noquery(state, device, &no_context_envelope()),
     };
+    let q = q.to_ascii_lowercase();
+
+    // 0) "continue <audiobook>" — resume the device's position in the book.
+    if let Some(book) = strip_prefixes(
+        &q,
+        &["continue ", "continue with ", "weiter ", "setze fort "],
+    ) {
+        if !book.is_empty() {
+            if let Some(resp) = continue_book(state, device, &book) {
+                return resp;
+            }
+        }
+    }
 
     // 1) Radio preset?
     if let Some((name, url)) = match_radio(&state.cfg.radio, &q) {
         return start_radio(state, device, url, name);
     }
 
+    // 2) Deterministic resolution over the in-memory library (sync — the
+    //    read guard never crosses an await).
+    match deterministic_play(state, device, &q) {
+        DeterministicPlay::Queue(ids) => return play_queue(state, device, ids),
+        DeterministicPlay::Track(id) => return start_file(state, device, id, 0, None),
+        DeterministicPlay::Miss => {}
+    }
+
+    // 3) Brain fallback: the LLM resolves it against the metadata KB
+    //    ("something for working out", "die psalmen", …).
+    match state.agent.resolve_play(&q, state.cfg.turn_timeout()).await {
+        Ok(outcome) if !outcome.is_none() => {
+            tracing::debug!(query = %q, action = %outcome.action, slug = %outcome.slug, reason = %outcome.reason, "brain resolved play");
+            match play_by_slug(state, device, &outcome) {
+                Some(resp) => resp,
+                None => not_found_response(&q),
+            }
+        }
+        Ok(outcome) => {
+            tracing::debug!(query = %q, reason = %outcome.reason, "brain found no match");
+            not_found_response(&q)
+        }
+        Err(e) => {
+            tracing::warn!(query = %q, %e, "brain resolve-play failed");
+            not_found_response(&q)
+        }
+    }
+}
+
+#[derive(Debug)]
+enum DeterministicPlay {
+    /// A whole queue (album / artist / genre / audiobook).
+    Queue(Vec<u64>),
+    /// A single track (fuzzy top hit).
+    Track(u64),
+    Miss,
+}
+
+/// The deterministic resolver: audiobook, album, artist, genre, fuzzy — in
+/// that order. Synchronous: the library read guard dies inside this fn.
+fn deterministic_play(state: &AppState, device: &str, q: &str) -> DeterministicPlay {
     let lib = state.library.read().unwrap();
-    // 2) Album by name.
-    if let Some(ids) = named_tracks(&lib, |t| !t.album.is_empty() && eq_norm(&t.album, &q)) {
-        return play_queue(state, device, ids);
+    // Audiobook by name (whole book, from the start).
+    if let Some(book) = fuzzy_book(&lib, q) {
+        let ids = lib.chapters_of_book(&book);
+        if !ids.is_empty() {
+            return DeterministicPlay::Queue(ids);
+        }
     }
-    // 3) Artist by name.
-    if let Some(ids) = named_tracks(&lib, |t| !t.artist.is_empty() && eq_norm(&t.artist, &q)) {
-        return play_queue(state, device, ids);
+    // Album by name.
+    if let Some(ids) = named_tracks(&lib, |t| !t.album.is_empty() && eq_norm(&t.album, q)) {
+        return DeterministicPlay::Queue(ids);
     }
-    // 4) Genre by name.
-    if let Some(ids) = named_tracks(&lib, |t| !t.genre.is_empty() && eq_norm(&t.genre, &q)) {
+    // Artist by name.
+    if let Some(ids) = named_tracks(&lib, |t| !t.artist.is_empty() && eq_norm(&t.artist, q)) {
+        return DeterministicPlay::Queue(ids);
+    }
+    // Genre by name.
+    if let Some(ids) = named_tracks(&lib, |t| !t.genre.is_empty() && eq_norm(&t.genre, q)) {
         let ids = if shuffle_of(state, device) {
             shuffled(ids)
         } else {
             ids
         };
-        return play_queue(state, device, ids);
+        return DeterministicPlay::Queue(ids);
     }
-    // 5) Fuzzy search.
-    let hits = search(&lib, &q, 5);
-    drop(lib);
+    // Fuzzy search.
+    let hits = search(&lib, q, 5);
     match hits.first() {
-        Some((id, _)) => start_file(state, device, *id, 0, None),
-        None => ResponseBuilder::new()
-            .say(format!("Sorry, I couldn't find {q} in your music library."))
-            .end_session()
-            .build(),
+        Some((id, _)) => DeterministicPlay::Track(*id),
+        None => DeterministicPlay::Miss,
     }
+}
+
+fn strip_prefixes(q: &str, prefixes: &[&str]) -> Option<String> {
+    for p in prefixes {
+        if let Some(rest) = q.strip_prefix(p) {
+            if !rest.trim().is_empty() {
+                return Some(rest.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Book match: exact first, then prefix either way.
+fn fuzzy_book(lib: &Library, q: &str) -> Option<String> {
+    let books = lib.books();
+    if let Some(b) = books.iter().find(|b| eq_norm(b, q)) {
+        return Some(b.clone());
+    }
+    books
+        .iter()
+        .find(|b| {
+            let n = b.to_ascii_lowercase();
+            n.starts_with(q) || q.starts_with(&n)
+        })
+        .cloned()
+}
+
+/// "Continue <book>": resume the device's current chapter+offset when it is
+/// inside the book; otherwise start at chapter one.
+fn continue_book(state: &Arc<AppState>, device: &str, book: &str) -> Option<Response> {
+    let needle = book.to_ascii_lowercase();
+    let (book_name, chs, resume_id, resume_off) = {
+        let lib = state.library.read().unwrap();
+        let book_name = lib.books().into_iter().find(|b| {
+            let n = b.to_ascii_lowercase();
+            n == needle || n.starts_with(&needle) || needle.starts_with(&n)
+        })?;
+        let chs = lib.chapters_of_book(&book_name);
+        if chs.is_empty() {
+            return None;
+        }
+        // Is the device's current track a chapter of this book?
+        let current = state.player().get(device).and_then(|p| p.current());
+        let (resume_id, resume_off) = current
+            .and_then(|id| lib.get(id))
+            .filter(|t| t.kind == CollectionKind::Audiobook && t.book == book_name)
+            .map(|t| {
+                (
+                    t.id,
+                    state
+                        .player()
+                        .get(device)
+                        .map(|p| p.current_offset_ms)
+                        .unwrap_or(0)
+                        .min(t.duration_ms.saturating_sub(5000)),
+                )
+            })
+            .unwrap_or((0, 0));
+        (book_name, chs, resume_id, resume_off)
+    };
+    if resume_id != 0 {
+        // Re-queue the book from the current chapter, resume the stream.
+        let rest = {
+            let lib = state.library.read().unwrap();
+            lib.chapters_of_book(&book_name)
+                .into_iter()
+                .skip_while(|id| *id != resume_id)
+                .collect::<Vec<_>>()
+        };
+        {
+            let mut players = state.player();
+            players
+                .entry(device.to_string())
+                .or_default()
+                .start_queue(rest);
+        }
+        Some(start_file(state, device, resume_id, resume_off, None))
+    } else {
+        Some(play_queue(state, device, chs))
+    }
+}
+
+/// Resolve the brain's slug to a playback action.
+#[allow(clippy::question_mark)] // the rad: branch destructures a tuple (no ?-form)
+fn play_by_slug(state: &Arc<AppState>, device: &str, outcome: &ResolveOutcome) -> Option<Response> {
+    let slug = outcome.slug.trim();
+    let lib = state.library.read().unwrap();
+    let resp = if let Some(id) = slug
+        .strip_prefix("trk:")
+        .and_then(|n| n.parse::<u64>().ok())
+    {
+        Some(start_file(state, device, id, 0, None))
+    } else if let Some(id) = slug
+        .strip_prefix("serm:")
+        .and_then(|n| n.parse::<u64>().ok())
+    {
+        Some(start_file(state, device, id, 0, None))
+    } else if let Some(name) = slug.strip_prefix("alb:") {
+        let ids = find_album_by_slug(&lib, name)?;
+        Some(play_queue(state, device, ids))
+    } else if let Some(name) = slug.strip_prefix("art:") {
+        let ids = find_artist_by_slug(&lib, name)?;
+        Some(play_queue(state, device, ids))
+    } else if let Some(rest) = slug.strip_prefix("abk:") {
+        let (name, chapter) = match rest.split_once(":ch:") {
+            Some((n, c)) => (n.to_string(), c.parse::<u32>().ok()),
+            None => (rest.to_string(), None),
+        };
+        let book = find_book_by_slug(&lib, &name)?;
+        let mut ids = lib.chapters_of_book(&book);
+        match chapter {
+            Some(n) if (1..=ids.len() as u32).contains(&n) => {
+                let rest: Vec<u64> = ids.split_off((n - 1) as usize);
+                Some(play_queue(state, device, rest))
+            }
+            _ => Some(play_queue(state, device, ids)),
+        }
+    } else if let Some(name) = slug.strip_prefix("rad:") {
+        let (station_name, url) = find_radio_by_slug(state, name)?;
+        Some(start_radio(state, device, url, station_name))
+    } else {
+        return None;
+    };
+    drop(lib);
+    resp
+}
+
+fn find_album_by_slug(lib: &Library, slug: &str) -> Option<Vec<u64>> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut names: Vec<&str> = Vec::new();
+    for t in lib.iter() {
+        if t.album.is_empty() {
+            continue;
+        }
+        if slugify(&t.album) == slug && seen.insert(t.album.clone()) {
+            names.push(&t.album);
+        }
+    }
+    names.first().and_then(|n| {
+        let ids = lib.tracks_in_album(n);
+        (!ids.is_empty()).then_some(ids)
+    })
+}
+
+fn find_artist_by_slug(lib: &Library, slug: &str) -> Option<Vec<u64>> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut names: Vec<&str> = Vec::new();
+    for t in lib.iter() {
+        if t.artist.is_empty() {
+            continue;
+        }
+        if slugify(&t.artist) == slug && seen.insert(t.artist.clone()) {
+            names.push(&t.artist);
+        }
+    }
+    names.first().and_then(|n| {
+        let ids = lib.tracks_by_artist(n);
+        (!ids.is_empty()).then_some(ids)
+    })
+}
+
+fn find_book_by_slug(lib: &Library, slug: &str) -> Option<String> {
+    lib.books().into_iter().find(|b| slugify(b) == slug)
+}
+
+fn find_radio_by_slug(state: &AppState, slug: &str) -> Option<(String, String)> {
+    for (name, url) in &state.cfg.radio.stations {
+        if slugify(name) == slug {
+            return Some((name.clone(), url.clone()));
+        }
+    }
+    None
+}
+
+fn not_found_response(q: &str) -> Response {
+    ResponseBuilder::new()
+        .say(format!("Sorry, I couldn't find {q} in your collections."))
+        .end_session()
+        .build()
 }
 
 fn no_context_envelope() -> Envelope {
@@ -372,13 +515,17 @@ pub fn start_file(
         offset_ms,
         expected,
         &title,
-        Some(&artist),
+        (!artist.trim().is_empty()).then_some(artist.as_str()),
         Some(art),
     );
     let mut b = ResponseBuilder::new();
-    b.say(format!("Playing {title} by {artist}."))
-        .play_audio(item)
-        .end_session();
+    b.say(if artist.trim().is_empty() {
+        format!("Playing {title}.")
+    } else {
+        format!("Playing {title} by {artist}.")
+    })
+    .play_audio(item)
+    .end_session();
     b.build()
 }
 
@@ -720,17 +867,6 @@ mod tests {
     }
 
     #[test]
-    fn decision_phrases() {
-        assert_eq!(parse_decision("yes"), Some(Decision::Approve));
-        assert_eq!(parse_decision("Yes please"), Some(Decision::Approve));
-        assert_eq!(parse_decision("approve"), Some(Decision::Approve));
-        assert_eq!(parse_decision("no"), Some(Decision::Deny));
-        assert_eq!(parse_decision("no thanks"), Some(Decision::Deny));
-        assert_eq!(parse_decision("yes, but always"), Some(Decision::Always));
-        assert_eq!(parse_decision("what is the weather"), None);
-    }
-
-    #[test]
     fn radio_matching() {
         let mut radio = crate::config::RadioConfig::default();
         radio
@@ -752,5 +888,181 @@ mod tests {
     fn intent_from_json() {
         let e = env(r#"{"version":"1.0","request":{"type":"LaunchRequest","requestId":"r"}}"#);
         assert_eq!(IntentKind::from_envelope(&e), IntentKind::Launch);
+    }
+
+    /// A throwaway AppState with a scanned library.
+    fn state_with(
+        dir: &std::path::Path,
+        items: Vec<aria_audio::CollectionItem>,
+    ) -> (Arc<AppState>, std::path::PathBuf) {
+        let mut cfg = crate::config::Config::default();
+        let data = dir.join("state");
+        std::fs::create_dir_all(&data).unwrap();
+        cfg.server.data_dir = Some(data.clone());
+        cfg.collections.items = items
+            .iter()
+            .map(|i| crate::config::CollectionEntry {
+                name: i.name.clone(),
+                kind: match i.kind {
+                    aria_audio::CollectionKind::Music => "music".into(),
+                    aria_audio::CollectionKind::Audiobook => "audiobook".into(),
+                    aria_audio::CollectionKind::Sermon => "sermon".into(),
+                },
+                path: i.path.clone(),
+            })
+            .collect();
+        let lib = aria_audio::Library::scan_collections(&items).unwrap();
+        let st = Arc::new(AppState::new(
+            cfg,
+            lib,
+            Arc::new(crate::agent::MockAgent::new()),
+        ));
+        (st, data)
+    }
+
+    fn write_music(dir: &std::path::Path) -> std::path::PathBuf {
+        let root = dir.join("rock");
+        std::fs::create_dir_all(root.join("Queen/News of the World")).unwrap();
+        std::fs::write(
+            root.join("Queen/News of the World/01 - We Will Rock You.mp3"),
+            b"\xff\xfb",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("Queen/News of the World/02 - Love of My Life.mp3"),
+            b"\xff\xfb",
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn deterministic_play_album_genre_fuzzy() {
+        let dir = std::env::temp_dir().join(format!("aria-router-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = write_music(&dir);
+        let (st, data) = state_with(
+            &dir,
+            vec![aria_audio::CollectionItem {
+                name: "rock".into(),
+                kind: aria_audio::CollectionKind::Music,
+                path: root,
+            }],
+        );
+        let q = |s: &str| s.to_ascii_lowercase();
+        // Album exact.
+        match deterministic_play(&st, "dev", &q("news of the world")) {
+            DeterministicPlay::Queue(ids) => assert_eq!(ids.len(), 2),
+            other => panic!("expected album queue, got {other:?}"),
+        }
+        // Artist exact.
+        match deterministic_play(&st, "dev", &q("queen")) {
+            DeterministicPlay::Queue(ids) => assert_eq!(ids.len(), 2),
+            other => panic!("expected artist queue, got {other:?}"),
+        }
+        // Fuzzy single track.
+        match deterministic_play(&st, "dev", &q("will rock you")) {
+            DeterministicPlay::Track(_) => {}
+            other => panic!("expected a track, got {other:?}"),
+        }
+        // Miss.
+        assert!(matches!(
+            deterministic_play(&st, "dev", &q("zzz nothing zzz")),
+            DeterministicPlay::Miss
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn play_by_slug_track_album_audiobook() {
+        let dir = std::env::temp_dir().join(format!("aria-router-slug-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let music = write_music(&dir);
+        let ab = dir.join("bible-audio");
+        std::fs::create_dir_all(ab.join("Psalmen")).unwrap();
+        std::fs::write(ab.join("Psalmen/001 - Psalm 1.mp3"), b"\xff\xfb").unwrap();
+        std::fs::write(ab.join("Psalmen/002 - Psalm 2.mp3"), b"\xff\xfb").unwrap();
+        let (st, data) = state_with(
+            &dir,
+            vec![
+                aria_audio::CollectionItem {
+                    name: "rock".into(),
+                    kind: aria_audio::CollectionKind::Music,
+                    path: music.clone(),
+                },
+                aria_audio::CollectionItem {
+                    name: "bible-audio".into(),
+                    kind: aria_audio::CollectionKind::Audiobook,
+                    path: ab,
+                },
+            ],
+        );
+        let any_track_id = st
+            .library
+            .read()
+            .unwrap()
+            .iter()
+            .find(|t| t.kind == aria_audio::CollectionKind::Music)
+            .unwrap()
+            .id;
+        let book = st.library.read().unwrap().chapters_of_book("Psalmen");
+        assert_eq!(book.len(), 2);
+        // trk slug.
+        let out = ResolveOutcome {
+            action: "track".into(),
+            slug: format!("trk:{:04}", any_track_id),
+            reason: String::new(),
+        };
+        assert!(play_by_slug(&st, "dev", &out).is_some());
+        // album slug.
+        let out = ResolveOutcome {
+            action: "album".into(),
+            slug: "alb:news-of-the-world".into(),
+            reason: String::new(),
+        };
+        assert!(play_by_slug(&st, "dev", &out).is_some());
+        // whole audiobook.
+        let out = ResolveOutcome {
+            action: "audiobook".into(),
+            slug: "abk:psalmen".into(),
+            reason: String::new(),
+        };
+        assert!(play_by_slug(&st, "dev", &out).is_some());
+        // unknown slug.
+        let out = ResolveOutcome {
+            action: "track".into(),
+            slug: "trk:9999".into(),
+            reason: String::new(),
+        };
+        // trk:9999 -> start_file with a missing id => a (valid) "not found" response.
+        assert!(play_by_slug(&st, "dev", &out).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn continue_book_starts_from_chapter_one() {
+        let dir = std::env::temp_dir().join(format!("aria-router-ab-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ab = dir.join("bible-audio");
+        std::fs::create_dir_all(ab.join("Psalmen")).unwrap();
+        std::fs::write(ab.join("Psalmen/001 - Psalm 1.mp3"), b"\xff\xfb").unwrap();
+        std::fs::write(ab.join("Psalmen/002 - Psalm 2.mp3"), b"\xff\xfb").unwrap();
+        let (st, data) = state_with(
+            &dir,
+            vec![aria_audio::CollectionItem {
+                name: "bible-audio".into(),
+                kind: aria_audio::CollectionKind::Audiobook,
+                path: ab,
+            }],
+        );
+        let resp = continue_book(&st, "dev", "psalmen");
+        assert!(resp.is_some(), "continue psalmen should start the book");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

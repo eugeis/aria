@@ -1,4 +1,4 @@
-name: CI
+name: ci
 
 on:
   push:
@@ -7,91 +7,67 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pin the mosaic generator the `brain` job renders with. Bump when the
+  # emitted app surface changes and re-verify the render + e2e. This carries
+  # the MCP-client env-bound bearer auth (`app.mcp.servers[].auth_env` —
+  # needed to consume the bible app's protected /mcp) + the workflow agent
+  # node's `system` prompt prop (the voice persona).
+  MOSAIC_REV: 6ad1b49e8cd3e8d2ee95805bde18e67b8dc58aad
 
 jobs:
-  fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --all --check
-
-  clippy-test-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo build --release
-
-  smoke:
-    # End-to-end: run the real binary against a synthetic library and drive
-    # it with real ASK v1 requests (launch, play, stream the token).
-    runs-on: ubuntu-latest
+  brain:
+    # Render the brain through the pinned mosaic generator, build it, and run
+    # the tessera's declared e2e scenarios (the media/sermons knowledge
+    # surfaces + the ask/resolve-play workflows over the O10 cassette + the
+    # ADR 0012 default-deny access model). Self-hosted (a private repo cannot
+    # use GitHub-hosted runners) — the li7 runner, labeled `aria`.
+    name: brain (render + build + e2e)
+    runs-on: [self-hosted, li7, aria]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release
-      - name: Fixtures (synthetic silent MP3s + config)
-        run: |
-          python3 - <<'EOF'
-          import os
-          frame = b'\xff\xfb\x90\xc0' + b'\x00' * 413  # MPEG-1 L3 128kbps 44.1k mono
-          os.makedirs('/tmp/aria-ci/music', exist_ok=True)
-          for name in ('CI Test - Alpha.mp3', 'CI Test - Beta.mp3'):
-              open(f'/tmp/aria-ci/music/{name}', 'wb').write(frame * 200)
-          EOF
-          cat > /tmp/aria-ci/config.toml <<'EOF'
-          [server]
-          bind = "127.0.0.1:8123"
-          public_base_url = "http://127.0.0.1:8123"
-          data_dir = "/tmp/aria-ci"
-          [library]
-          paths = ["/tmp/aria-ci/music"]
-          rescan_secs = 0
-          [zeroclaw]
-          mock = true
-          [radio]
-          stations = {}
-          [logging]
-          level = "info"
-          EOF
-      - name: Run server + ASK round-trip
-        run: |
-          ARIA_CONFIG=/tmp/aria-ci/config.toml ./target/release/aria > /tmp/aria-ci/server.log 2>&1 &
-          SERVER=$!
-          trap 'kill $SERVER 2>/dev/null' EXIT
-          for _ in $(seq 1 30); do
-            curl -sf http://127.0.0.1:8123/health > /dev/null && break || sleep 0.5
-          done
-          curl -sf http://127.0.0.1:8123/health | grep -q '"ok":true'
-          echo "health ok"
+      - name: checkout mosaic @ pinned rev
+        uses: actions/checkout@v4
+        with:
+          repository: eugeis/mosaic
+          ref: ${{ env.MOSAIC_REV }}
+          path: .mosaic
+          fetch-depth: 1
+          # mosaic is private; GITHUB_TOKEN only covers this repo.
+          token: ${{ secrets.MOSAIC_GITHUB_TOKEN }}
+      - name: build mosaic
+        working-directory: .mosaic
+        run: cargo build -p mosaic-cli --release
+      - name: validate the tessera plan
+        run: .mosaic/target/release/mosaic check .
+      - name: render the aria app
+        run: .mosaic/target/release/mosaic build . -o "$RUNNER_TEMP/aria-out"
+      # Build only the `aria` app package (not the `web` member — its leptos
+      # subtree is a separate, network-dependent resolve).
+      - name: build the generated app
+        run: cd "$RUNNER_TEMP/aria-out" && cargo build -p aria
+      - name: "e2e (the tessera's kind=test scenarios)"
+        run: .mosaic/target/release/mosaic test . -o "$RUNNER_TEMP/aria-out"
 
-          RESP=$(curl -sf -X POST http://127.0.0.1:8123/alexa -H 'content-type: application/json' -d '{
-            "version": "1.0",
-            "session": {"new": true, "sessionId": "s1",
-              "application": {"applicationId": "ci"}, "user": {"userId": "u"}},
-            "context": {"System": {"device": {"deviceId": "ci-device"}}},
-            "request": {"type": "IntentRequest", "requestId": "r1", "locale": "en-US",
-              "intent": {"name": "PlayMusicIntent",
-                "slots": {"query": {"name": "query", "value": "alpha",
-                  "resolutionStatus": {"status": "SUCCESS"}}}}}
-          }')
-          echo "$RESP"
-          echo "$RESP" | grep -q 'AudioPlayer.Play'
-
-          STREAM_TK=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin)['response']['directives'][0]['audioItem']['stream']['token'])")
-          URL=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin)['response']['directives'][0]['audioItem']['stream']['url'])")
-          BYTES=$(curl -sf "$URL" | wc -c)
-          echo "streamed $BYTES bytes with token $STREAM_TK"
-          [ "$BYTES" -gt 50000 ]
-          RANGE_BYTES=$(curl -sf -H 'Range: bytes=10000-' "$URL" | wc -c)
-          echo "range resume: $RANGE_BYTES bytes"
-          [ "$RANGE_BYTES" -eq $((BYTES - 10000)) ]
+  adapter:
+    # The hand-written ASK surface: unit tests (the ASK protocol, the player
+    # state machine, the streaming edge cases, the scanner + deterministic
+    # gzip, the brain-bridge config).
+    name: adapter (tests)
+    runs-on: [self-hosted, li7, aria]
+    defaults:
+      run:
+        working-directory: adapter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: adapter
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --workspace

@@ -1,331 +1,223 @@
-# aria
+# Aria — your Echo, your hardware, your content
 
-![CI](https://github.com/eugeis/aria/actions/workflows/ci.yml/badge.svg)
-
-**Amazon Alexa as the voice front-end for your [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) agent.**
-
-Ask your Echo questions, discuss things, let the agent act (with voice
-approvals), and play your own music library or internet radio — all served
-from your hardware, in Rust, with no ffmpeg, no mpd, no external daemons.
+Aria is a **personal voice assistant for Amazon Alexa that runs entirely on
+your hardware**: your own music and radio, your audiobooks, the Bible (via
+the [bible](https://github.com/eugeis/bible) Mosaic app — 500+ translations),
+your own sermons and seminar scripts, and a grounded LLM for everything else.
 
 ```
-            STT + TTS (free, low latency)
-    Echo device ──────────────────────────────── Amazon
-         │  transcripts in / SSML out
-         ▼
-    aria (this project)          ZeroClaw gateway (ws://…/ws/chat)
-    ┌─────────────────────┐  WS   ┌──────────────────────────┐
-    │ /alexa  (ASK v1)    │──────▶│ agent loop: memory,      │
-    │ /stream (music)     │       │ tools, security, SOPs    │
-    │ /art (cover)        │◀──────│ approval prompts (voice) │
-    └─────────────────────┘       └──────────────────────────┘
+   Echo ──(Amazon STT)──> ASK JSON ──> https://aria.eisler-systems.de/alexa
+                                                        │
+                                              ┌─────────┴──────────┐
+                                              │  aria-ask (adapter) │  hand-written Rust
+                                              │  ASK protocol,      │  this repo: adapter/
+                                              │  /stream/{token},   │
+                                              │  player state, scan │
+                                              └─────────┬──────────┘
+                       loopback REST (adapter token)    │
+                                              ┌─────────▼──────────┐
+                                              │  aria (the brain)  │  a Mosaic app (tessera.yaml)
+                                              │  `ask` +           │  ask = LLM agent over:
+                                              │  `resolve-play`    │   • media KB (your scan metadata)
+                                              │  workflows, RAG,   │   • sermons KB (your scripts)
+                                              │  MCP client ───────┼──> bible app's /mcp (verses, search)
+                                              │  identity, deploy  │   vLLM chat model (deepseek-v4-flash)
+                                              └────────────────────┘
+   Echo <──(Amazon TTS speaks our SSML)── ASK response + AudioPlayer.Play(url=/stream/{token})
 ```
 
-- **Amazon is the ears and mouth.** The Echo transcribes your voice and speaks
-  whatever aria returns as SSML. No STT/TTS engines in the box, and the
-  audio path Amazon handles is the fastest one available.
-- **ZeroClaw is the brain.** aria keeps a persistent WebSocket to the
-  gateway's `/ws/chat` endpoint, so every question goes through the same
-  agent, memory, tools, and security policy as your other channels
-  (Telegram, dashboard, …). When the agent asks for tool approval, aria
-  voices the prompt ("ZeroClaw needs your approval: the shell tool wants to
-  run… say yes") and forwards your answer back.
-- **Music stays self-hosted.** A pure-Rust library scanner (`lofty`) indexes
-  your MP3/AAC files; playback is a chunked HTTP stream with Range support,
-  so pause/resume/seek work exactly like any Alexa music skill. Internet
-  radio presets are piped through the same stream server. Zero transcoding
-  for MP3/AAC.
+**Amazon is the ears and the mouth** (STT + TTS). **Everything else is yours.**
 
 ## What you can say
 
-| Utterance | What happens |
+| You say | What happens |
 |---|---|
-| "Alexa, ask aria what's the weather" | Forwarded to the ZeroClaw agent; answer spoken |
-| "Alexa, \<anything unmatched\>" | Fallback → agent (when ASK provides the transcript) |
-| "play bohemian rhapsody" / "play dark side of the moon" / "play queen" / "play jazz" | Song / album / artist / genre from your library |
-| "play rock fm" | Radio preset from config |
-| "play" / "pause" / "stop" / "next" / "previous" | Playback control |
-| "jump to 2:30" | Seek within the current track |
-| "shuffle" / "repeat this song" / "repeat all" | Queue modes |
-| "yes" / "no" after an approval prompt | Approve / deny the agent's tool call |
+| "Alexa, ask aria to play bohemian rhapsody" | Deterministic library resolve (album/artist/genre/fuzzy) → streams the MP3 |
+| "…play queen" / "…play rock" | Artist / genre queue (shuffle-aware) |
+| "…play psalmen" | The audiobook, from chapter one |
+| "…continue psalmen" | Resumes the device's last chapter + offset |
+| "…play the station rock fm" | Internet radio preset (piped through) |
+| "…play something for working out" | The brain resolves it against your scan metadata (LLM + RAG) |
+| "…play psalm 23" / "…play the sermon on grace" | Verse text (bible app) / your sermon recording, spoken or streamed |
+| "…what did the sermon on grace say about receiving?" | Grounded answer over your sermon scripts |
+| "…ask aria what is the weather" / anything else | The LLM brain (grounded in your collections + the Bible app) |
+| play / pause / stop / next / previous / jump to 2 minutes, shuffle, repeat one / all / off | The standard playback controls |
 
-## How it is built
+> **Honest caveat:** a custom skill cannot take over the built-in
+> "Alexa, play X" (that requires being a certified music service). The
+> invocation is **"ask aria to …"** — once you're in the skill, the plain
+> playback words work.
 
-Rust workspace, four crates:
+## Repository layout (the bible shape)
 
-| Crate | Role |
-|---|---|
-| `aria-alexa` | ASK v1 protocol types, intent classification, response/SSML builders |
-| `aria-audio` | Library scan (`lofty`), search, per-device player state, playback tokens |
-| `aria-zeroclaw` | Gateway WS client: turns with timeout, partial-reply degradation, approval bridging |
-| `aria` (root) | axum server: `/alexa`, `/stream/{token}`, `/art/{id}`, `/health`; config; TLS |
+```
+tessera.yaml            the BRAIN, declared (identity, model, the media + sermons
+                        collections, the bible MCP client, the ask / resolve-play
+                        workflows, the li7 deploy, the e2e suite)
+knowledge/
+  media/media.jsonl.gz  committed SAMPLE of the scan output (e2e + fresh boot);
+                        the live one is generated on /data by the adapter
+  sermons/              committed SAMPLE sermon script (the real ones are synced
+                        from eugeis/sermons to /data/knowledge/sermons on li7)
+  cassettes/aria-llm.json  the O10 LLM cassette — the e2e runs hermetically
+                        (recorded responses, no network)
+adapter/                the ASK SURFACE (hand-written Rust, its own workspace)
+  src/                  main (serve/scan), router (ASK intents -> actions/brain),
+                        stream (/alexa /stream /art), agent (the brain bridge),
+                        scan (lofty walk -> media.jsonl.gz + reindex), config, state
+  crates/aria-alexa/    the ASK v1 protocol (envelope, intents, SSML)
+  crates/aria-audio/    the audio engine (library/collections, player, tokens, search)
+  Dockerfile            the mosaic/aria-ask image
+skill/
+  interaction-model.json  the Alexa intent model (import in the dev console)
+  skill-manifest.json     the skill manifest (endpoint + AUDIO_PLAYER)
+deploy/li7/
+  inject-sidecars.py    injects the aria-ask sidecar + media hostPath + ingress
+                        split into the rendered helm chart
+  SECRETS.md            the runner secret files + host dirs for li7
+.github/workflows/
+  ci.yml                brain: render+build+e2e (pinned MOSAIC_REV) · adapter: fmt+clippy+test
+  deploy.yml            MANUAL: build+import both images, helm install, hostPath patch, smoke
+docs/architecture.md    the design rationale
+```
 
-Design notes and trade-offs: [`docs/architecture.md`](docs/architecture.md).
+## The two halves
 
----
+### The brain (tessera.yaml — the Mosaic app)
 
-## Installation
+- **`media` collection** (`kind: entries`): the adapter's scan publishes one
+  metadata record per track / album / artist / radio / audiobook / chapter /
+  sermon recording — `text` = retrieval text, `slug` = stable id, everything
+  else in `meta` (kind_media, collection, artist, album, book, file,
+  duration_ms, …). Searchable via `POST /api/vectordb/media/search`
+  (BM25 + local 256-dim vectors, meta filters) and the MCP
+  `search_knowledge(kb=media)`.
+- **`sermons` collection** (`kind: docs`): your sermon/seminar scripts as
+  markdown — content RAG (themes, quotes, "what did it say about …").
+- **`ask` workflow**: one voice turn — a tool-using LLM agent (short spoken
+  answers by system prompt) over the two KBs + the bible app's MCP
+  (`scripture_passage`, `search_knowledge`).
+- **`resolve-play` workflow**: search over `media` + one structured LLM
+  decision `{action, slug, reason}` — the fallback for natural-language play
+  requests the deterministic resolver misses.
+- **bible MCP client**: `app.mcp.servers[0]` = `https://bible.eisler-systems.de/mcp`,
+  the bible `reader` bearer via `auth_env: MOAIC_MCP_BIBLE_AUTH` (env-bound —
+  the credential never lands in the tessera or the generated source).
+- **identity** (ADR 0012 default-deny): `admin` user (ops + the web chat
+  lens), `adapter` service account (editor — runs the workflows + reindex).
+- What you get for free with a Mosaic app: `POST /api/assistant/chat` (the
+  web `/chat` lens), A2A (`/a2a`), the MCP server (`/mcp`), sessions,
+  `/openapi.json`, the rendered Helm chart for li7.
 
-**Target setup (the one this guide assumes):** one Linux VM that already runs
-ZeroClaw (gateway + Telegram bot, …). aria is installed on that same VM, so
-the gateway is local; only the Alexa-facing HTTPS port needs to be reachable
-from the internet.
+### The adapter (aria-ask — the hand-written surface)
 
-### What you need
+What a Mosaic app cannot declare (Law 1) and the Echo needs:
 
-| # | Thing | Why |
-|---|---|---|
-| 1 | Linux VM (x86_64) with ZeroClaw running | the brain; aria talks to its gateway over `ws://` |
-| 2 | ZeroClaw **gateway enabled** with a known **port** and **bearer token** | `GET /ws/chat` endpoint |
-| 3 | An agent alias in ZeroClaw to talk to | e.g. your main agent, or a dedicated fast `voice` agent (lower latency) |
-| 4 | A music folder with **MP3/AAC** files (`.mp3`, `.m4a`, `.aac`, `.mp4`) | streamed natively to the Echo, no transcoding |
-| 5 | A **public HTTPS URL** for the VM (domain + Caddy, or a tunnel) | Amazon calls the skill endpoint from the internet |
-| 6 | A free **Amazon developer account** | to register the skill |
-| 7 | Rust toolchain (≥ 1.85) — or use the prebuilt release binary | to build aria (see "Get the binary") |
+- **the ASK v1 protocol** — intent envelopes in, SSML + `AudioPlayer.Play`
+  directives out, the skill client-id check;
+- **raw audio streaming** — `/stream/{token}`: MP3/AAC progressive download
+  with byte-precise resume (ID3v2 skip + ms→byte offset + HTTP Range merge),
+  unguessable 48-hex tokens (12 h TTL) that ARE the stream URL, piped radio,
+  `/art/{id}` cover art for Echo Show;
+- **per-device player state** — queue, history (previous), shuffle, repeat,
+  resume offset, persisted to `state.json`;
+- **the scanner** — lofty tag reading over your collections (music /
+  audiobook / sermon folder semantics), the deterministic
+  `media.jsonl.gz` publisher, and the brain reindex trigger.
 
-### 1. Get the aria binary
+The ZeroClaw bridge of aria v1 is gone: the brain IS the Mosaic app. (If a
+ZeroClaw surface is ever needed again, Mosaic's `gateway.routes` gives you a
+byte-passthrough to its REST/SSE side with a 3-line tessera declaration.)
 
-Option A — prebuilt static binary (no Rust needed):
+## Developing locally
 
 ```bash
-# from https://github.com/eugeis/aria/releases (aria-<ver>-x86_64-linux-musl.tar.gz)
-curl -LO https://github.com/eugeis/aria/releases/latest/download/aria-0.1.0-x86_64-linux-musl.tar.gz
-tar xzf aria-*.tar.gz
-sudo install -m 755 aria /usr/local/bin/aria
+# 1. the brain (needs the mosaic CLI — cargo build -p mosaic-cli in ../mosaic)
+../mosaic/target/release/mosaic check .
+../mosaic/target/release/mosaic build . -o out
+(cd out && cargo build -p aria)
+(cd out && ./target/debug/aria serve --bind 127.0.0.1:3000)   # + the e2e env vars, see the tessera
+
+# 2. the e2e suite (hermetic — the O10 cassette replays the LLM calls)
+../mosaic/target/release/mosaic test . -o out
+
+# 3. the adapter
+cd adapter && cargo test --workspace
+# a standalone smoke (mock brain, a throwaway media dir): see /tmp/aria-smoke in the
+# session notes, or:
+./target/debug/aria-ask scan  --config /path/config.toml     # one scan + publish (+ reindex)
+./target/debug/aria-ask serve --config /path/config.toml     # the ASK server (brain.mock = true)
 ```
 
-Option B — build from source:
+The e2e cassette (`knowledge/cassettes/aria-llm.json`) is recorded against a
+local mock provider; the e2e LLM base URL points at a dead local port on
+purpose, so a missing/mismatched key fails fast instead of touching a real
+provider. Re-record by running the three scenario requests against the app
+with `MOAIC_LLM_CASSETTE` pointed at a fresh file and a live (or mock)
+provider, then commit the result.
 
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-git clone https://github.com/eugeis/aria
-cd aria
-cargo build --release        # -> target/release/aria
-sudo install -m 755 target/release/aria /usr/local/bin/aria
-```
+## Deploying (li7)
 
-Check it runs:
+See **`deploy/li7/SECRETS.md`** (the runner secret files + the host
+directories). Then run the **`deploy`** workflow (Actions → deploy →
+Run workflow, `ref: main`). It:
 
-```bash
-aria --help
-```
+1. renders the brain with the pinned `MOSAIC_REV`,
+2. builds + imports `mosaic/aria:<sha>` and `mosaic/aria-ask:<sha>` into k3s,
+3. runs `deploy/li7/inject-sidecars.py` (sidecar + media hostPath + service
+   ports + the ingress path split: `/alexa`, `/stream`, `/art` → the adapter;
+   everything else → the brain),
+4. creates the secrets + the cert-manager certificate for
+   `aria.eisler-systems.de` (the `*.eisler-systems.de` wildcard already points
+   at li7's Traefik — no DNS work needed),
+5. `helm upgrade --install` + the hostPath strategic-merge patch
+   (`/data`, `/vector` on ext4; **re-apply after every upgrade** — the patch
+   does not survive a re-render) + the rollout wait + in-pod smoke.
 
-### 2. Configure
+Drop audio into `/var/lib/aria-media/…` (the layout in SECRETS.md) and
+`kubectl -n aria rollout restart deployment/aria` — the adapter's initial
+scan publishes the metadata and the brain reindexes on its next boot.
 
-```bash
-sudo mkdir -p /etc/aria
-sudo cp config/aria.example.toml /etc/aria/config.toml   # (from the repo, or the release tarball)
-sudoedit /etc/aria/config.toml
-```
+## Registering with your Alexa account
 
-The keys that matter for the VM setup:
+The skill is a **custom skill** (not a certified music service — see the
+caveat above). One-time console setup at [developer.amazon.com](https://developer.amazon.com)
+→ Alexa Console → your developer account:
 
-```toml
-[server]
-bind = "127.0.0.1:8080"                    # Caddy sits in front (see step 4)
-public_base_url = "https://<your-domain>"  # EXACT public URL the Echo will use
-client_id = "amzn1.ask.skill.<...>"        # from the Alexa console (step 5); rejects other skills
-
-[library]
-paths = ["/srv/music"]                     # your music folder (MP3/AAC)
-rescan_secs = 3600                         # rescan hourly; 0 = only at startup
-
-[zeroclaw]
-gateway = "ws://127.0.0.1:3000"            # your ZeroClaw gateway, same VM
-# token = "…"                              # or: Environment=ARIA_ZC_TOKEN=… in the unit file
-agent_alias = "voice"                      # agent to talk to (see note below)
-turn_timeout_ms = 7500                     # Alexa answers must land within ~8 s
-
-[radio.stations]                           # optional presets
-"rock fm" = "https://…/stream.mp3"
-```
-
-Notes:
-
-- **Gateway port & token** — from your ZeroClaw configuration (the same
-  gateway your other channels use; the dashboard's settings page shows both).
-  The token can live in the config or as `ARIA_ZC_TOKEN` in the systemd unit
-  (preferred — keeps secrets out of the TOML).
-- **Agent choice** — you can point `agent_alias` at the same agent your
-  Telegram bot uses, or create a dedicated lightweight agent with a fast
-  model for snappier voice answers.
-- **`public_base_url`** — used to build the `/stream/…` and `/art/…` URLs
-  handed to the Echo. It must be reachable from your Echo devices.
-
-Environment overrides (systemd-friendly): `ARIA_CONFIG`, `ARIA_ZC_TOKEN`,
-`ARIA_GATEWAY`, `ARIA_PUBLIC_URL`, `RUST_LOG`.
-
-### 3. Quick sanity check (before exposing anything)
-
-```bash
-ARIA_CONFIG=/etc/aria/config.toml /usr/local/bin/aria
-# in another shell:
-curl -s localhost:8080/health | python3 -m json.tool
-# {"ok":true,"library_tracks":…,"playable_tracks":…,…}
-```
-
-You can also drive the ASK endpoint by hand (mock mode, `zeroclaw.mock =
-true`, needs no gateway at all):
-
-```bash
-curl -s -X POST localhost:8080/alexa -H 'content-type: application/json' -d '{
-  "version":"1.0",
-  "session":{"new":true,"sessionId":"s1","application":{"applicationId":"x"},"user":{"userId":"u"}},
-  "context":{"System":{"device":{"deviceId":"laptop"}}},
-  "request":{"type":"IntentRequest","requestId":"r1","locale":"en-US",
-    "intent":{"name":"PlayMusicIntent","slots":{"query":{"name":"query","value":"queen"}}}}
-}'
-# -> JSON with an AudioPlayer.Play directive; the stream URL in it is
-#    directly downloadable: curl -O <that-url>
-```
-
-Stop the test instance (Ctrl-C) before installing the service.
-
-### 4. Public HTTPS endpoint (required by Amazon)
-
-Amazon's servers must reach `/alexa` over HTTPS, and your Echo must reach
-`/stream/…`. Pick one:
-
-**A. Caddy on the VM (recommended, needs a domain pointing at the VM):**
-
-```bash
-sudo apt install caddy
-# /etc/caddy/Caddyfile  (from deploy/Caddyfile — adjust the domain):
-<your-domain> {
-    encode gzip
-    request_header -X-Forwarded-For
-    reverse_proxy 127.0.0.1:8080
-}
-sudo systemctl reload caddy
-```
-
-Caddy obtains the Let's Encrypt certificate automatically. If your VM is
-behind NAT without a port forward, use the tunnel variant:
-
-**B. Cloudflare Tunnel (no open ports):**
-
-```bash
-# install cloudflared, `cloudflared tunnel login`, create tunnel "aria"
-# config: ingress -> http://127.0.0.1:8080 for your domain
-sudo systemctl enable --now cloudflared
-```
-
-Then `public_base_url = "https://<your-tunnel-domain>"`.
-
-Verify from outside: `curl -s https://<your-domain>/health`.
-
-### 5. Register the Alexa skill
-
-1. [Alexa developer console](https://developer.amazon.com/alexa/console/ask) →
-   **Create Skill** → *Custom* (Alexa Skills Kit) → name it **Aria**
-   (invocation name: `aria`).
-2. **Skill builder → Interaction Model → Import from file** →
-   [`skill/interaction-model.json`](skill/interaction-model.json) → save &
-   distribute (every locale you want).
-3. **Skill builder → Endpoints**: Endpoint URL
-   `https://<your-domain>/alexa`, *Use a custom SSL certificate* off (your
-   domain cert is fine), set **SSL certificate** only for native certs.
-4. **Interfaces** → tick **Audio Player** (required for music).
-   [`skill/skill-manifest.json`](skill/skill-manifest.json) has this
-   pre-enabled if you import the whole skill instead of building it in the
-   console; you'll need to upload the skill icons it references.
-5. Copy the **Client ID** (`amzn1.ask.skill.…`, under *Skill IDs*) into
-   `server.client_id` in `/etc/aria/config.toml` and restart aria — this
-   makes the endpoint ignore requests from any other skill.
-6. **Test** tab → add your Amazon login to *Development* test accounts.
-
-### 6. Run as a service
-
-```bash
-sudo cp deploy/aria.service /etc/systemd/system/aria.service
-sudoedit /etc/systemd/system/aria.service    # paths, ARIA_ZC_TOKEN, user
-sudo systemctl daemon-reload
-sudo systemctl enable --now aria
-journalctl -u aria -f
-```
-
-The unit sets `Environment=ARIA_ZC_TOKEN` to the gateway bearer token — the only secret you
-should put outside the TOML.
-
-### 7. Say it
-
-On any Echo logged into the test account:
-
-> **"Alexa, ask aria hello."**
-
-Then: *play some music*, *ask aria what is the capital of France*, *pause*,
-*next*, *jump to 30 seconds*…
-
-When everything works, publish the skill (in *Development* it's private to
-your test accounts).
-
----
-
-## Configuration reference
-
-See [`config/aria.example.toml`](config/aria.example.toml) — every key is
-documented inline and every key has a built-in default.
-
-| Section | Keys | Purpose |
-|---|---|---|
-| `[server]` | `bind`, `public_base_url`, `client_id`, `tls_cert`, `tls_key`, `data_dir` | Listener, public URL for stream links, skill authentication, native TLS (alternative to Caddy), where `state.json` lives |
-| `[library]` | `paths`, `rescan_secs` | Folders scanned for MP3/AAC (FLAC indexed, not streamed in v0.1); rescan interval |
-| `[zeroclaw]` | `gateway`, `token`, `agent_alias`, `turn_timeout_ms`, `voice_note`, `mock` | Gateway WS URL + bearer token, agent to talk to, per-turn budget (clamped 1000–7900 ms), system note prepended to utterances, dev echo mode |
-| `[radio]` | `stations` | Preset name → stream URL (MP3/AAC, or a plain HTTP audio stream) |
-| `[logging]` | `level` | `off..trace` (or `RUST_LOG`) |
-
-State (per-device queues, positions, tokens) persists in `data_dir/state.json`
-(default `~/.aria/state.json`).
-
-## Music library
-
-- **MP3 and AAC** (`.m4a`, `.aac`, `.mp4`) stream natively to Echo devices —
-  no transcoding.
-- `.flac` is indexed (searchable) but not playable in v0.1.
-- ID3 tags give title/artist/album/genre; missing tags fall back to folder
-  and file names. Cover art is served at `/art/{id}` for Echo Show devices.
-- Search order for a query: radio preset → album name → artist → genre →
-  fuzzy title/artist/album/genre match.
-
-## Operations
-
-```bash
-curl -s https://<your-domain>/health            # library size, active tokens, uptime
-journalctl -u aria -p warning -f                # logs
-sudo systemctl restart aria                     # re-reads config
-rm ~/.aria/state.json                           # forget per-device playback state
-```
-
-Adding music: drop files in a `paths` folder; the rescan picks them up
-(`rescan_secs`) or on restart.
-
-## Development
-
-```bash
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # 40+ unit tests, incl. stream/seek/tag edge cases
-```
-
-GitHub Actions runs all of the above on every push/PR, plus an end-to-end
-**smoke job** that starts the real binary against a synthetic library and
-drives it with ASK v1 requests (launch → play → download the stream, incl.
-Range). Tagging `v*` produces a static musl release binary
-([`.github/workflows/`](.github/workflows/)).
-
-Local end-to-end without an Echo: run with `zeroclaw.mock = true` and use
-the `curl` example in step 3.
+1. **Create the skill** (or open the existing one): Custom → Proactive/none
+   are irrelevant — choose **Custom**, name it *Aria*.
+2. **Endpoint**: set the HTTPS endpoint URI to
+   `https://aria.eisler-systems.de/alexa` (must be a valid public TLS
+   endpoint — the cert-manager cert makes that true). The console POSTs a
+   test envelope there on save; you need `server.client_id` set in the
+   adapter config (baked into the image) to the skill's
+   **Client ID** (`amzn1.ask.skill.…`, under Endpoint configuration) —
+   requests from other skills are rejected with an empty response.
+3. **Interaction model**: import `skill/interaction-model.json`
+   (invocation name `aria`; PlayMusicIntent + AskIntent + the playback
+   controllers + notifiers + Fallback).
+4. **Manifest**: publish under en-US with the summary/description from
+   `skill/skill-manifest.json`; host the skill icons
+   (`icon-108.png` / `icon-512.png`) anywhere public — e.g. under
+   `https://aria.eisler-systems.de/skill-icons/` (add a `/skill-icons`
+   ingress rule or a small static file in the adapter if you go that route).
+5. **Enable the `AUDIO_PLAYER` interface** (Endpoint configuration →
+   Interfaces). Required for `AudioPlayer.Play` + the playback notifiers.
+6. **Test**: stay in the skill's **Development** stage — no certification
+   needed for a personal skill; it works on your own account's Echo devices
+   immediately. (Publishing to Production is optional and only makes sense
+   for other people's accounts.)
+7. On the Echo: "Alexa, open aria" or "Alexa, ask aria to play …".
 
 ## Roadmap
 
-- [ ] FLAC → MP3 on-the-fly transcode (feature-gated, `lame` FFI)
-- [ ] HLS for radio stations that only offer `.m3u8`
-- [ ] Multiple agents per room (device → agent mapping)
-- [ ] Direct operational intents (status / restart / SOP triggers) via the
-      gateway REST API
-- [ ] Docker image
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+- **Live TTS for text-only sermons** — the `StreamSource` registry already
+  isolates the stream kinds; a `Tts` variant piping the voice-sidecar (the
+  bible pod's Kokoro) output to the Echo would let any sermon script be read
+  aloud on demand (pre-rendered audio files work today: drop them in a
+  `sermon` collection).
+- **A browser voice widget** — declare a `voice:` block (the bible pattern:
+  local whisper + Kokoro sidecars) and the brain gains `/api/voice` +
+  `/voice` for browser testing without the Echo.
+- **ZeroClaw bridge** — `gateway.routes` (HTTP passthrough) if the general
+  agent is ever wanted back behind the voice.

@@ -1,0 +1,87 @@
+# aria-ask — the ASK surface of the Aria voice assistant.
+#
+# This is the thin Alexa-facing sidecar of the Aria Mosaic app (the brain):
+#   * the Alexa Skills Kit endpoint        -> POST /alexa
+#   * raw audio streaming for the Echo     -> GET  /stream/{token}, GET /art/{id}
+#   * the library scanner / metadata publisher (subcommand: `aria-ask scan`)
+#
+# The BRAIN is the rendered Mosaic app (see tessera.yaml at the repo root).
+# It exposes the `ask` + `resolve-play` workflows over REST; the adapter calls
+# them on loopback with the `adapter` service-account bearer token.
+#
+# Config resolution: an explicit `-c/--config`, else $ARIA_CONFIG, else
+# ~/.aria/config.toml, else built-in defaults. Env overrides:
+#   ARIA_CONFIG         config file path
+#   ARIA_DATA_DIR       state directory (default ~/.aria)
+#   ARIA_BRAIN_TOKEN    brain service-account bearer (overrides brain.token)
+#   ARIA_BRAIN_URL      brain base url (overrides brain.base_url)
+#   ARIA_PUBLIC_URL     public https base url for stream links
+#   RUST_LOG            log filter (default from [logging].level)
+
+[server]
+# Bind address (the sidecar is only reached via the pod's ingress split).
+bind = "0.0.0.0:8090"
+# Public base URL Amazon/Echo devices reach (https). Used to build the
+# /stream/{token} + /art/{id} URLs.
+public_base_url = "https://aria.eisler-systems.de"
+# The Alexa skill client id (amzn1.ask.skill.…). When set, requests from any
+# other skill are rejected with an empty response. Set it in the console
+# (Endpoint configuration → Client ID) and via ARIA_CLIENT_ID (or uncomment):
+# client_id = "amzn1.ask.skill.YOUR-SKILL-CLIENT-ID"
+# Native TLS (cert+key). Leave unset when the ingress terminates TLS.
+# tls_cert = "/etc/ssl/cert.pem"
+# tls_key  = "/etc/ssl/key.pem"
+# Where state.json (per-device players) lives.
+data_dir = "/data/adapter"
+
+# The user's media collections: one or more folders, each with a kind.
+#   music      recursive; `root/Artist/Album/nn - title.mp3` layout (tags win,
+#              folder hierarchy fills missing artist/album)
+#   audiobook  one immediate subfolder per book; its files are the chapters
+#   sermon     recursive; any audio file is one recording ("YYYY-MM-DD - T.mp3")
+[collections]
+# Re-scan every N seconds; a changed scan republishes media.jsonl.gz and
+# asks the brain to reindex. 0 = never (rely on `aria-ask scan`).
+rescan_secs = 3600
+
+[[collections.items]]
+name = "rock"
+kind = "music"
+path = "/media/rock"
+
+[[collections.items]]
+name = "bible-audio"
+kind = "audiobook"
+path = "/media/bible-audio"
+
+[[collections.items]]
+name = "sermons"
+kind = "sermon"
+path = "/media/sermons-audio"
+
+# The brain (the rendered Mosaic app). In the li7 pod this is loopback.
+[brain]
+base_url = "http://127.0.0.1:3000"
+# Bearer token of the `adapter` service account (the same secret the brain
+# validates). Set via ARIA_BRAIN_TOKEN in the pod.
+# token = "..."
+# Wall-clock budget for one voice turn before giving up (clamped 1000..7900 ms).
+turn_timeout_ms = 7500
+# Development: no brain, canned answers (lets you test the Alexa side alone).
+mock = false
+
+# The scan -> publish -> reindex pipeline.
+[scan]
+# Where media.jsonl.gz is written. The brain ingests `knowledge/media` under
+# its knowledge base, so this must land on the brain's /data volume.
+out_path = "/data/knowledge/media/media.jsonl.gz"
+# POST the brain's /api/ops/reindex after a changed scan.
+reindex_after_scan = true
+
+# Internet-radio presets (MP3/AAC streams), matched by PlayMusicIntent before
+# the library is consulted. Keys are lowercase display names.
+[radio.stations]
+"rock fm" = "https://r.example.com/rock.mp3"
+
+[logging]
+level = "info"

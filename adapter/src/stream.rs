@@ -22,6 +22,7 @@ use tokio::io::{AsyncRead, AsyncSeek, BufReader, ReadBuf, SeekFrom};
 
 use crate::state::AppState;
 
+#[axum::debug_handler]
 pub async fn handle_alexa(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

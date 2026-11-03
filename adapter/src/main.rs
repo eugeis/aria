@@ -1,10 +1,19 @@
+//! aria-ask — the ASK surface of the Aria voice assistant.
+//!
+//! Two jobs:
+//!   serve  the Alexa Skills Kit endpoint (/alexa), the raw audio streaming
+//!          (/stream/{token}, /art/{id}), per-device player state, and the
+//!          brain bridge (the Aria Mosaic app over loopback REST).
+//!   scan   walk the media collections, index tags (lofty), and publish the
+//!          deterministic metadata JSONL (media.jsonl.gz) the brain ingests
+//!          as its `media` knowledge collection — then ask the brain to
+//!          reindex.
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::Context as _;
-use aria_audio::Library;
 use axum::Router;
 use axum::routing::get;
 use tracing_subscriber::EnvFilter;
@@ -12,15 +21,17 @@ use tracing_subscriber::EnvFilter;
 mod agent;
 mod config;
 mod router;
+mod scan;
 mod state;
 mod stream;
 
-use agent::{AgentBackend, MockAgent, ZeroClawAgent};
-use aria_zeroclaw::AgentEvent;
-use state::PendingApproval;
+use agent::{BrainAgent, MockAgent};
 
-fn main() -> anyhow::Result<()> {
-    let config_path = parse_args();
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (command, config_path) = split_args(&args)?;
+
     let cfg =
         config::load(config_path.as_deref()).map_err(|e| anyhow::anyhow!(e.to_exit_message()))?;
 
@@ -28,21 +39,49 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| EnvFilter::new(cfg.logging.level.clone()));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(run(cfg))
+    match command {
+        Command::Scan { reindex } => run_scan(&cfg, reindex).await,
+        Command::Serve => run_serve(cfg).await,
+    }
 }
 
-fn parse_args() -> Option<PathBuf> {
-    let mut args = std::env::args().skip(1);
+#[derive(Default)]
+enum Command {
+    #[default]
+    Serve,
+    Scan {
+        reindex: bool,
+    },
+}
+
+fn split_args(args: &[String]) -> anyhow::Result<(Command, Option<PathBuf>)> {
+    let mut command = Command::Serve;
     let mut config_path = None;
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "-c" | "--config" => config_path = args.next().map(PathBuf::from),
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "serve" => command = Command::Serve,
+            "scan" => {
+                command = Command::Scan { reindex: true };
+                if i + 1 < args.len() && args[i + 1] == "--no-reindex" {
+                    command = Command::Scan { reindex: false };
+                    i += 1;
+                }
+            }
+            "-c" | "--config" => {
+                i += 1;
+                config_path = args.get(i).map(PathBuf::from);
+            }
             "-h" | "--help" => {
                 println!(
-                    "aria — Alexa voice front-end for ZeroClaw\n\nusage: aria [OPTIONS]\n\noptions:\n  -c, --config <PATH>   config file (default: ~/.aria/config.toml)\n  -h, --help            show help\n\nenv:\n  ARIA_CONFIG         config file path\n  ARIA_DATA_DIR       state directory (default ~/.aria)\n  ARIA_ZC_TOKEN       ZeroClaw gateway bearer token\n  ARIA_GATEWAY        gateway base url (ws://host:port)\n  ARIA_PUBLIC_URL     public https base url for stream links\n  RUST_LOG              log filter"
+                    "aria-ask — the ASK surface of the Aria voice assistant\n\n\
+                     usage: aria-ask <COMMAND> [OPTIONS]\n\n\
+                     commands:\n  serve              run the /alexa + /stream server (default)\n  \
+                     scan [--no-reindex]  rescan the collections, publish media.jsonl.gz, ask the brain to reindex\n\n\
+                     options:\n  -c, --config <PATH>   config file (default: ~/.aria/config.toml)\n  -h, --help            show help\n\n\
+                     env:\n  ARIA_CONFIG         config file path\n  ARIA_DATA_DIR       state directory (default ~/.aria)\n  \
+                     ARIA_BRAIN_TOKEN    brain service-account bearer\n  ARIA_BRAIN_URL      brain base url (default http://127.0.0.1:3000)\n  \
+                     ARIA_PUBLIC_URL     public https base url for stream links\n  RUST_LOG            log filter"
                 );
                 std::process::exit(0);
             }
@@ -51,81 +90,111 @@ fn parse_args() -> Option<PathBuf> {
                 std::process::exit(2);
             }
         }
+        i += 1;
     }
-    config_path
+    Ok((command, config_path))
 }
 
-async fn run(cfg: config::Config) -> anyhow::Result<()> {
-    if cfg.server.public_base_url.trim().is_empty() && !cfg.zeroclaw.mock {
+/// One full scan + publish (+ optional brain reindex).
+async fn run_scan(cfg: &config::Config, reindex: bool) -> anyhow::Result<()> {
+    // Validate the collection kinds up front (fail fast, good message).
+    cfg.collection_items().map_err(anyhow::Error::msg)?;
+    let task_cfg = cfg.clone();
+    let (library, records) = tokio::task::spawn_blocking(move || scan::scan_library(&task_cfg))
+        .await
+        .context("scan task panicked")?
+        .map_err(anyhow::Error::msg)?;
+    let changed = scan::publish(cfg, &records)?;
+    println!(
+        "scanned {} item(s) ({} records); media.jsonl.gz {}",
+        library.len(),
+        records.len(),
+        if changed { "updated" } else { "unchanged" }
+    );
+    if changed && reindex {
+        match scan::reindex(cfg).await {
+            Ok(()) => println!("brain reindex requested"),
+            Err(e) => {
+                eprintln!(
+                    "brain reindex failed: {e} (the brain picks up the scan on its next boot)"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
+    if cfg.server.public_base_url.trim().is_empty() && !cfg.brain.mock {
         tracing::warn!(
             "server.public_base_url is empty; Echo devices cannot reach /stream links. \
-             Set it to your public https URL (e.g. https://aria.example.com)."
+             Set it to your public https URL (e.g. https://aria.eisler-systems.de)."
         );
     }
 
-    // Library scan (blocking; can be large).
-    let paths = cfg.library.paths.clone();
-    let library = tokio::task::spawn_blocking(move || Library::scan(&paths))
+    // Initial scan: index the library AND publish the metadata the brain
+    // ingests (a fresh brain boot reindexes from the file; a running brain
+    // is told via /api/ops/reindex when the file changed).
+    let task_cfg = cfg.clone();
+    let (library, records) = tokio::task::spawn_blocking(move || scan::scan_library(&task_cfg))
         .await
-        .context("library scan task panicked")?
-        .context("library scan failed")?;
-
-    let agent: Arc<dyn AgentBackend> = if cfg.zeroclaw.mock {
-        tracing::info!("zeroclaw.mock = true: using mock agent (no gateway connection)");
-        Arc::new(MockAgent::new())
-    } else {
-        Arc::new(ZeroClawAgent::new(&cfg))
-    };
-
-    let state = Arc::new(state::AppState::new(cfg.clone(), library, agent.clone()));
-
-    // Fold gateway events into app state.
-    {
-        let st = state.clone();
-        let backend = st.agent.clone();
-        agent::spawn_event_collector(backend.as_ref(), move |ev| match ev {
-            AgentEvent::ApprovalRequested { device, info } => {
-                tracing::info!(device = %device, tool = %info.tool, "approval requested");
-                st.set_pending_approval(
-                    &device,
-                    Some(PendingApproval {
-                        info,
-                        asked_at: Instant::now(),
-                    }),
-                );
-            }
-            AgentEvent::LateReply { device, text } => {
-                tracing::info!(device = %device, "cached late agent reply");
-                st.set_cached_reply(&device, text);
-            }
-            AgentEvent::SessionError { device, message } => {
-                tracing::warn!(device = %device, %message, "agent session error");
-            }
-        });
+        .context("initial scan task panicked")?
+        .map_err(anyhow::Error::msg)?;
+    let changed = scan::publish(&cfg, &records).context("publish media.jsonl.gz")?;
+    if changed && !cfg.brain.mock {
+        match scan::reindex(&cfg).await {
+            Ok(()) => tracing::info!("brain reindex requested after initial scan"),
+            Err(e) => tracing::warn!(%e, "brain reindex after initial scan failed"),
+        }
     }
 
-    // Periodic library rescan.
-    if cfg.library.rescan_secs > 0 {
+    let agent: Arc<dyn agent::AgentBackend> = if cfg.brain.mock {
+        tracing::info!("brain.mock = true: using mock brain (no REST calls)");
+        Arc::new(MockAgent::new())
+    } else {
+        Arc::new(BrainAgent::new(&cfg))
+    };
+
+    let state = Arc::new(state::AppState::new(cfg.clone(), library, agent));
+
+    // Periodic rescan: refresh the in-memory library, republish on change,
+    // reindex the brain.
+    if cfg.collections.rescan_secs > 0 {
         let st = state.clone();
-        let paths = cfg.library.paths.clone();
-        let secs = cfg.library.rescan_secs;
+        let secs = cfg.collections.rescan_secs;
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(secs));
             ticker.tick().await; // first tick is immediate; skip it
             loop {
                 ticker.tick().await;
-                let paths = paths.clone();
-                let lib = match tokio::task::spawn_blocking(move || Library::scan(&paths)).await {
-                    Ok(Ok(lib)) => lib,
-                    Ok(Err(e)) => {
-                        tracing::warn!(%e, "library rescan failed");
-                        continue;
+                let cfg = st.cfg.clone();
+                let (lib, records) =
+                    match tokio::task::spawn_blocking(move || scan::scan_library(&cfg)).await {
+                        Ok(Ok(x)) => x,
+                        Ok(Err(e)) => {
+                            tracing::warn!(%e, "rescan failed");
+                            continue;
+                        }
+                        Err(_) => continue,
+                    };
+                match scan::publish(&st.cfg, &records) {
+                    Ok(true) => {
+                        if !st.cfg.brain.mock {
+                            match scan::reindex(&st.cfg).await {
+                                Ok(()) => tracing::info!(
+                                    records = records.len(),
+                                    "collections changed: published + reindexed"
+                                ),
+                                Err(e) => tracing::warn!(%e, "reindex after rescan failed"),
+                            }
+                        }
                     }
-                    Err(_) => continue,
-                };
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(%e, "publish after rescan failed"),
+                }
                 let n = lib.len();
                 *st.library.write().unwrap() = lib;
-                tracing::info!(tracks = n, "library rescanned");
+                tracing::info!(items = n, "collections rescanned");
             }
         });
     }
@@ -161,7 +230,7 @@ async fn run(cfg: config::Config) -> anyhow::Result<()> {
         .with_context(|| format!("bad server.bind: {}", cfg.server.bind))?;
 
     let has_tls = cfg.server.tls_cert.is_some() && cfg.server.tls_key.is_some();
-    println!("aria starting");
+    println!("aria-ask starting");
     println!(
         "  listen       : {addr}{}",
         if has_tls { " (TLS)" } else { "" }

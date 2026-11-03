@@ -1,5 +1,4 @@
-//! Shared application state: library, per-device players, playback tokens,
-//! pending approvals, and cached late agent replies.
+//! Shared application state: library, per-device players, playback tokens.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -7,25 +6,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use aria_audio::{Library, PlaybackRegistry, PlayerState};
-use aria_zeroclaw::ApprovalInfo;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentBackend;
 use crate::config::Config;
-
-/// A tool approval we should ask the user about on the next turn.
-#[derive(Debug, Clone)]
-pub struct PendingApproval {
-    pub info: ApprovalInfo,
-    pub asked_at: Instant,
-}
-
-/// An agent reply that completed after the user's request had already been
-/// answered (post-approval turn or timeout); spoken on the next turn.
-#[derive(Debug, Clone)]
-pub struct CachedReply {
-    pub text: String,
-}
 
 pub struct AppState {
     pub cfg: Config,
@@ -35,10 +19,6 @@ pub struct AppState {
     pub players: Mutex<HashMap<String, PlayerState>>,
     pub registry: PlaybackRegistry,
     pub agent: Arc<dyn AgentBackend>,
-    /// device id -> pending tool approval awaiting a yes/no.
-    pub approvals: Mutex<HashMap<String, PendingApproval>>,
-    /// device id -> late reply to speak on the next turn.
-    pub cached_reply: Mutex<HashMap<String, CachedReply>>,
     pub started: Instant,
 }
 
@@ -51,8 +31,6 @@ impl AppState {
             players: Mutex::new(players),
             registry: PlaybackRegistry::new(),
             agent,
-            approvals: Mutex::new(HashMap::new()),
-            cached_reply: Mutex::new(HashMap::new()),
             started: Instant::now(),
         }
     }
@@ -61,47 +39,6 @@ impl AppState {
         match self.players.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
-        }
-    }
-
-    /// Pending approval for `device`, if one is still within the gateway's
-    /// approval timeout (stale ones are dropped; the gateway auto-denied them).
-    pub fn pending_approval(&self, device: &str) -> Option<PendingApproval> {
-        let mut map = self.approvals.lock().unwrap();
-        let p = map.get(device)?;
-        if p.asked_at.elapsed() >= std::time::Duration::from_secs(p.info.timeout_secs.max(1)) {
-            map.remove(device);
-            return None;
-        }
-        Some(p.clone())
-    }
-
-    pub fn set_pending_approval(&self, device: &str, p: Option<PendingApproval>) {
-        let mut m = self.approvals.lock().unwrap();
-        match p {
-            Some(v) => {
-                m.insert(device.to_string(), v);
-            }
-            None => {
-                m.remove(device);
-            }
-        }
-    }
-
-    pub fn take_cached_reply(&self, device: &str) -> Option<String> {
-        self.cached_reply
-            .lock()
-            .unwrap()
-            .remove(device)
-            .map(|c| c.text)
-    }
-
-    pub fn set_cached_reply(&self, device: &str, text: String) {
-        if !text.trim().is_empty() {
-            self.cached_reply
-                .lock()
-                .unwrap()
-                .insert(device.to_string(), CachedReply { text });
         }
     }
 

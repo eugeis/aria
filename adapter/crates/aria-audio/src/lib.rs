@@ -5,7 +5,7 @@ pub mod player;
 pub mod registry;
 pub mod search;
 
-pub use library::{Cover, Format, Library, Track};
+pub use library::{CollectionItem, CollectionKind, Cover, Format, Library, Track, slugify};
 pub use player::{PlayerState, Repeat};
 pub use registry::{PlaybackRegistry, ResolvedStream, StreamSource};
 pub use search::search;

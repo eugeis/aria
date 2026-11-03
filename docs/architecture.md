@@ -1,133 +1,157 @@
-# Architecture
+# Aria architecture (the Mosaic era)
 
-## Why a standalone bridge instead of a ZeroClaw channel
+This document replaces the v1 (ZeroClaw bridge) architecture doc. The short
+version: **the brain became a Mosaic app; the ASK surface stayed hand-written
+Rust; the folder collections became a RAG knowledge base.**
 
-ZeroClaw's channels are *message* adapters: inbound text in, outbound text
-out, handled by the agent loop. An Alexa skill needs three things a channel
-model doesn't cover:
+## 1. The division of labor
 
-1. **An always-on inbound HTTPS endpoint** that Amazon calls (JSON in, JSON
-   out), with its own session semantics (skill sessions, device context).
-2. **A raw audio streaming server**: `AudioPlayer` directives point Echo
-   devices at stream URLs that aria must serve (chunked HTTP, Range
-   resume, expected-token validation).
-3. **A device-facing state machine**: queue/position/shuffle/repeat per
-   device, playback tokens, player reports (`PlaybackStarted/…`).
+| Concern | Owner | Why |
+|---|---|---|
+| STT (speech → text) | Amazon | The ASK request carries the transcript; no local whisper needed for the Alexa path |
+| TTS (text → speech) | Amazon | We return SSML; `outputSpeech` is spoken by the device |
+| The ASK v1 protocol (intents, directives, SSML pipeline, client-id check) | `aria-ask` adapter | Raw JSON protocol handling + byte-level details are not declarative (Mosaic Law 1) |
+| Audio streaming (`/stream/{token}`, Range resume, ID3v2 skip, piped radio, cover art) | `aria-ask` adapter | Byte-precise HTTP streaming with per-device tokens — not a CQRS command, not a workflow node |
+| Per-device player state (queue/history/shuffle/repeat/resume) | `aria-ask` adapter | Driven by PlaybackController + PlaybackNotifier requests; a state machine, not a declarative aggregate (shuffles, offsets) |
+| Library scanning (lofty tags, folder semantics, collections) | `aria-ask` adapter | The only component that reads audio files (besides the Echo itself) |
+| Knowledge (media metadata RAG, sermon content RAG) | the brain (Mosaic `vector_dbs`) | `kind: entries` JSONL + `kind: docs` markdown; BM25 + local 256-dim vectors, meta filters, delta manifest |
+| The LLM turns (ask, resolve-play) | the brain (Mosaic workflows) | `agent` node (tools = the two KBs + the bible MCP) + `llm` node (structured decision) over the vLLM |
+| The Bible (verses, translations, search) | the bible app (its `/mcp`) | 500+ modules already ingested there; consumed via the brain's MCP client (env-bound bearer) |
+| Identity, deploy, docs, MCP server, web chat, A2A | the brain (auto-derived) | A Mosaic app projects all of these from the tessera |
 
-So aria is a separate Rust service that owns the Alexa protocol and the
-audio plane, and delegates *thinking* to ZeroClaw through its documented
-gateway WebSocket API (`GET /ws/chat`). ZeroClaw stays unmodified and can
-follow upstream; aria is the thin, swappable voice front.
+## 2. Why the brain is a Mosaic app (and not a ZeroClaw bridge)
 
-### The WS contract (as implemented in `aria-zeroclaw`)
+v1 bridged to ZeroClaw's gateway WS (turn slots, approval frames, ~90 tools)
+because ZeroClaw was the only "brain" with memory + tools + RAG. The Mosaic
+AI stack provides exactly the needed subset, declaratively:
 
-- Connect: `ws://host/ws/chat?agent_alias=<alias>&session_id=alexa-<device>&token=<bearer>`
-  (subprotocol `zeroclaw.v1`; bearer also accepted via header/query).
-- Client → server: `{"type":"message","content":"…"}`,
-  `{"type":"approval_response","request_id":"…","decision":"approve|deny|always"}`
-- Server → client: `{"type":"chunk","content":"<delta>"}`,
-  `{"type":"done","full_response":"…","cost_usd":…}`,
-  `{"type":"approval_request","request_id":"…","tool":"…","arguments_summary":"…","timeout_secs":n}`
+- **knowledge RAG** over the user's own folders (the `entries` source kind is
+  purpose-built for scan-generated metadata: one JSONL line per item,
+  `text` + `slug` + full `meta`),
+- **a grounded LLM** (workflow `agent` nodes: the tool loop over KB search +
+  MCP calls),
+- **durable sessions / memory** (ADR 0128) if conversation memory is ever
+  wanted per Echo,
+- **MCP client** to the bible app (and to anything else that grows an MCP
+  server),
+- **A2A + a web chat lens** for free (the owner can chat with the brain from
+  a browser without an Echo).
 
-One WS session per Alexa device, keyed by device id, created lazily, kept
-alive, reconnected with capped backoff. The stable `session_id` gives the
-device persistent agent memory across skill sessions.
+What ZeroClaw added that v2 does *not* need: tool *approvals* spoken over the
+voice (no dangerous tool calls in a music/assistant skill) and ~90 general
+tools. If the general agent is ever wanted back, Mosaic's `gateway.routes`
+byte-passthrough covers ZeroClaw's REST/SSE surface with a 3-line tessera
+declaration — no framework change.
 
-## Why Amazon does STT/TTS
+The two genuine Mosaic gaps found while building this were added to Mosaic
+itself (eugeis/mosaic):
 
-The latency-critical path (mic → text, text → speech) is handled at
-Amazon's edge:
+1. **MCP client auth** — `app.mcp.servers[].auth_env`: an env var holding the
+   bearer presented to a streamable-HTTP MCP server. Without it, the
+   default-deny bible `/mcp` was unreachable from another app (the generated
+   client sent no auth header at all).
+2. **Agent node system prompt** — a node-level `system` prop on the
+   workflow `agent` node (the voice persona). `run_agent` already honored
+   `spec.system` (O4 subagents); the emitter just never set it.
 
-- In: ASK sends the **transcript** in the `IntentRequest`. No Whisper/local
-  STT in the box.
-- Out: aria returns `outputSpeech` (SSML); Amazon TTS speaks it. No Piper/
-  ElevenLabs in the box.
+## 3. The collections model
 
-What crosses the wire to ZeroClaw is a text turn — the same as any other
-channel. The agent's own TTS providers remain available for channels that
-need them; the voice path here deliberately doesn't use them (lower latency,
-zero cost, zero config).
-
-## The 8-second rule
-
-ASK requires the skill endpoint to respond within ~8 s or the Echo times
-out. A full LLM turn can exceed that, so `aria-zeroclaw` runs each turn
-under `turn_timeout_ms` (default 7500, clamped ≤ 7900):
-
-- **Done in time** → speak `full_response`.
-- **Timeout with streamed text** → speak the partial (chunks accumulate
-  live; a sentence spoken is better than silence).
-- **Timeout with nothing** → canned "taking longer than expected".
-- **Approval request arrives mid-turn** → the turn returns early; the prompt
-  is spoken; the gateway turn stays alive until the user answers.
-
-The recommended complement is a dedicated `voice` agent in ZeroClaw with a
-fast model and a short system prompt — latency is a config decision.
-
-## Approval bridging
-
-ZeroClaw's security model gates risky tool calls behind approvals. On the
-gateway WS those surface as `approval_request` frames; the reply is an
-`approval_response` on the same socket. aria maps that onto voice turns:
+The user's media are **one or more folder collections, each with a kind**:
 
 ```
-turn N:   user: "restart the web server"
-          agent → approval_request(shell: systemctl restart …)
-          aria → "ZeroClaw needs your approval: the shell tool wants to
-                    run 'systemctl restart…'. Say yes to allow it."
-turn N+1: user: "yes"
-          aria → approval_response(approve) → "Approved. I'll tell you when
-                    it's done."
-          agent finishes in background → late `done`
-turn N+2: user: anything (agent turn)
-          aria speaks the cached late reply first, then the new answer.
+[collections]
+[[collections.items]]  name = "rock"        kind = "music"      path = "/media/rock"
+[[collections.items]]  name = "bible-audio" kind = "audiobook"  path = "/media/bible-audio"
+[[collections.items]]  name = "sermons"     kind = "sermon"     path = "/media/sermons-audio"
 ```
 
-State lives in `AppState.approvals` (device → pending) and
-`AppState.cached_reply` (device → late reply). While a turn waits for an
-approval, further agent turns on that device are refused by the gateway's
-per-session queue — aria answers "there's a pending approval, say yes or
-no" instead.
+- **music** — recursive; `root/Artist/Album/nn - title.mp3`. Tags win; the
+  folder hierarchy fills missing artist (1st segment) / album (2nd segment);
+  the filename fills a missing title (`01 - Title` prefix stripped).
+- **audiobook** — one immediate subfolder per book; its files are the
+  chapters (ordered by track number, then filename). Narrator = the artist
+  tag. "Play \<book\>" starts at chapter one; "continue \<book\>" resumes
+  the device's last chapter + offset (per-device, persisted in state.json).
+- **sermon** — recursive; any audio file is one recording;
+  `YYYY-MM-DD - Title` filenames keep the date out of the spoken title.
 
-## Music engine
+MP3 + AAC (m4a/m4b) stream to the Echo; FLAC is indexed (searchable) but not
+playable.
 
-- **Scan**: recursive walk of configured roots; `lofty` reads tags +
-  duration + bitrate (pure Rust, no tag daemons). FLAC is indexed but
-  `playable=false` (v0.1 streams only what Echo decodes natively).
-- **Search**: word-AND over title/artist/album/genre with field weights;
-  album/artist/genre get exact-name fast paths. No embeddings: for voice
-  queries ("bohemian rhapsody queen") precision beats recall, and this stays
-  O(n) with no model in memory.
-- **Playback tokens**: 48-char random hex, bound to (device, source, start
-  offset), 12 h TTL. The token is the `audioItem.stream.token` **and** the
-  URL path — the stream endpoint is unguessable and self-describing.
-- **Streaming**:
-  - Files: chunked (256 KiB) HTTP, `Content-Type: audio/mpeg|audio/aac`,
-    **Range supported** — resume = device reopens the same URL with
-    `Range: bytes=N-`; seek/first-play = byte offset derived from
-    `offset_ms × avg_bitrate` (MP3 frames make small seek error inaudible).
-  - Radio: `reqwest` byte stream piped through (MP3/AAC passthrough).
-- **Queue machine** (`PlayerState` per device): ordered queue + position,
-  history for "previous", `Repeat::{Off,One,All}`, shuffle (remaining queue),
-  persisted to `state.json`. `PlaybackNearlyFinished` preloads the next
-  stream, so back-to-back playback has no dead air.
+## 4. The scan → knowledge pipeline
 
-## Security
+```
+adapter rescan (startup, then every rescan_secs)
+  │  lofty walk over the collections
+  ▼
+in-memory Library (deterministic sort → stable track ids)
+  │  + radio presets from config
+  ▼
+media records (trk:/alb:/art:/rad:/abk:/abk:…:ch:/serm: slugs, all meta)
+  │  sorted by slug, keys sorted, gzip mtime=0 (ADR 0156 form)
+  ▼
+/data/knowledge/media/media.jsonl.gz   (shared hostPath with the brain)
+  │  unchanged file ⇒ no write (byte comparison)
+  ▼  (on change)
+POST http://127.0.0.1:3000/api/ops/reindex   (the adapter's service token)
+  ▼
+brain delta-ingest (ADR 0019: unchanged files keep entries + embeddings)
+```
 
-- `/alexa` validates `client.application.clientId` against
-  `server.client_id` (other skills hitting the URL get a silent end).
-- Stream URLs are unguessable tokens; art URLs are bounded by track id.
-- The ZeroClaw bearer token stays local (env or config, never in logs).
-- TLS: Caddy in front (recommended) or native rustls in aria.
-- Hardened systemd unit provided.
+Fresh host: the brain boots fine with an empty `knowledge/media` (fail-soft
+ingest) + the committed SAMPLE corpus baked into the image; the adapter's
+initial scan fills in the real catalog.
 
-## Failure modes
+The slugs are the contract between the two halves: the brain's
+`resolve-play` returns a slug; the adapter maps `trk:NNNN`/`serm:NNNN` →
+track id, `alb:`/`art:`/`abk:` → the library's own lookups, `rad:` → the
+radio presets.
+
+## 5. The voice turn (the 8-second rule)
+
+Alexa expects a skill response in ~8 s. The paths:
+
+1. **Playback intents** (play/next/pause/…): pure adapter — deterministic
+   resolver in µs, no LLM. (The LLM fallback for natural-language play
+   requests budgets the same 7.5 s and degrades to "not found" — the
+   deterministic path already ran first.)
+2. **Ask / Fallback** (free speech): `POST /api/workflows/ask/run` — one
+   `agent` turn (up to 4 tool rounds) on the vLLM model. On timeout/error
+   the adapter speaks a canned line; the brain's own errors are typed
+   (`{status: {body}}`) so the adapter can distinguish "unreachable" from
+   "brain error".
+
+There is no partial-streaming (v1 had it against the ZeroClaw WS); the vLLM
+model is fast enough for short spoken answers, and the fallback lines cover
+the tail.
+
+## 6. Deployment (li7)
+
+One pod, two containers (the bible shape — a generated chart + li7-only
+glue injected by `deploy/li7/inject-sidecars.py`):
+
+- **aria** (the brain, port 3000): `/api/*`, `/mcp`, `/a2a`, `/chat` (web
+  lens), `/readyz`…
+- **aria-ask** (the adapter, port 8090): `/alexa`, `/stream/*`, `/art/*`,
+  `/health`
+
+Ingress (Traefik, cert-manager `letsencrypt-prod`, the
+`*.eisler-systems.de` wildcard): the three ASK paths → 8090, everything
+else → 3000. Volumes: `host-data` (ext4, `/data` in **both** containers —
+the brain ingests, the adapter publishes) + `host-vector` (ext4, `/vector`
+in the brain — LanceDB cannot commit on exFAT) + `media` (hostPath, `/media`
+in the adapter — the audio files). Secrets per `deploy/li7/SECRETS.md`
+(env-bound, never in the repo/tessera).
+
+## 7. Failure modes
 
 | Failure | Behavior |
 |---|---|
-| ZeroClaw down | WS reconnects with backoff; agent turns report "can't reach ZeroClaw" after 10 s |
-| Turn hangs | `STALE_TURN_AFTER` (5 min) frees the slot; per-turn timeout bounds user wait |
-| Approval timeout (gateway side) | Gateway auto-denies; aria's pending prompt becomes stale on the next decision |
-| Music file deleted mid-play | Stream 404s → Echo fires `PlaybackFailedRequest` → aria advances the queue |
-| Library rescan | Atomic swap of the `Arc<RwLock<Library>>`; in-flight streams keep their file handles |
-| aria restarts | Queues/position restored from `state.json`; old stream tokens expire (TTL) |
+| Brain down (pod) | Adapter speaks "I can't reach my brain right now"; playback (deterministic) still works |
+| vLLM down | `ask` returns a typed brain error → canned line; `resolve-play` → "not found" (the deterministic path already ran) |
+| Bible app down | The `ask` agent's bible tools fail per-call; the LLM answers from the local KBs or says it can't (the tools surface the error, the agent is told to admit it) |
+| Missing secret (MCP bearer) | The bible MCP calls fail closed with a typed error naming the env var |
+| Scan finds no files | Empty records published (idempotent); the KB keeps the previous corpus entries until a reindex with the new file (delta) |
+| FLAC / unsupported file | Indexed (searchable), "not streamable to the Echo" when play is requested |
+| Wrong skill hitting `/alexa` | Empty 200 (client-id check) — no leakage, no error page |
+| Stream token expired (>12 h) | 404 → the device's PlaybackFailed advances the queue (the old behavior, kept) |

@@ -5,17 +5,17 @@
       "locales": {
         "en-US": {
           "name": "Aria",
-          "summary": "Talk to your ZeroClaw agent and play self-hosted music.",
-          "description": "Aria turns your Alexa into a voice front-end for the ZeroClaw personal AI assistant. Ask questions, discuss things, let the agent act, and play your own music library or internet radio. Everything runs on your hardware.",
-          "smallIconUri": "https://REPLACE-WITH-YOUR-DOMAIN/skill-icons/icon-108.png",
-          "largeIconUri": "https://REPLACE-WITH-YOUR-DOMAIN/skill-icons/icon-512.png"
+          "summary": "Your own music, audiobooks, Bible and sermons — plus a personal assistant — through your Echo.",
+          "description": "Aria is a personal voice assistant running entirely on your hardware. Play your own music library, albums, artists and radio presets, continue audiobooks where you left off, hear Bible verses from your Bible app (500+ translations), listen to your own sermon recordings, ask about your sermon scripts — and ask your personal LLM anything, grounded in your collections. Say: play bohemian rhapsody, continue psalms, play psalm 23, play the sermon on grace, what did the sermon on grace say about receiving, or ask aria anything.",
+          "smallIconUri": "https://aria.eisler-systems.de/skill-icons/icon-108.png",
+          "largeIconUri": "https://aria.eisler-systems.de/skill-icons/icon-512.png"
         }
       }
     },
     "apis": {
       "custom": {
         "endpoint": {
-          "uri": "https://REPLACE-WITH-YOUR-DOMAIN/alexa"
+          "uri": "https://aria.eisler-systems.de/alexa"
         },
         "interfaces": [
           { "type": "AUDIO_PLAYER" }

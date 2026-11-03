@@ -1,0 +1,423 @@
+# Aria as a Mosaic app — the BRAIN behind the Alexa ASK surface.
+#
+# The repo holds two halves (the bible shape):
+#
+#   tessera.yaml + knowledge/   -- this file: the declarative brain (the
+#     rendered `aria` binary: REST, MCP client, the knowledge engine, the
+#     `ask` / `resolve-play` workflows, identity, deploy).
+#
+#   adapter/                    -- the hand-written ASK surface (the
+#     `aria-ask` binary): the Alexa Skills Kit protocol at /alexa, the raw
+#     audio streaming at /stream/{token} (Range/ID3 byte logic — not
+#     declarative, Law 1), the per-device player state machine, and the
+#     library scanner that writes knowledge/media/media.jsonl.gz.
+#
+#   /srv data flow:
+#     [collections on /media] --scan--> knowledge/media/media.jsonl.gz
+#       (adapter subcommand, lofty tags + folder hierarchy, deterministic
+#        gzip) --delta ingest--> collection `media` (kind: entries: one
+#        record per track / album / artist / radio / audiobook / chapter /
+#        sermon recording, all playable metadata in `meta`)
+#
+#     eugeis/sermons --sync (tools/sync-sermons.sh)--> knowledge/sermons/
+#       (markdown scripts, kind: docs — CONTENT RAG, so the assistant can
+#       quote/summarize what a sermon says)
+#
+#   bible.eisler-systems.de --MCP client (app.mcp.servers `bible`, the
+#     reader bearer via MOAIC_MCP_BIBLE_AUTH)--> the `ask` workflow's agent
+#     node (scripture_passage / search_knowledge over 500+ modules)
+#
+#   Alexa --> /alexa (adapter) --> POST /api/workflows/{ask,resolve-play}/run
+#     (loopback, the `adapter` service account) --> spoken SSML +
+#     AudioPlayer.Play directives back out the other side.
+#
+# The ZeroClaw bridge of aria v1 is GONE: the mosaic AI stack (knowledge
+# RAG + workflow agent + MCP client + sessions) is the brain. If a
+# ZeroClaw surface is ever needed again, `gateway.routes` (byte
+# passthrough) covers its REST/SSE side without any mosaic change.
+
+app:
+  name: aria
+  about: "Aria — personal voice assistant. The brain behind the Alexa ASK surface: the owner's own music / audiobook / sermon collections (RAG over scan-generated metadata), the Bible app (its MCP server), and a grounded LLM for everything else."
+  parts: [aria, metrics]
+  # L13: the web /chat assistant routes across the two collections by
+  # intent; the voice workflows name their collection explicitly.
+  assistant:
+    route: auto
+  # ADR 0023 app-level env (flows to the k8s deployment, NOT the local e2e).
+  # On li7: /data = the knowledge base (the scan output, the sermon scripts,
+  # the ADR 0100 persist seam, the embedded sqlite) on an ext4 hostPath;
+  # /vector = the LanceDB dataset (MUST be ext4 — LanceDB linkat's its
+  # manifests, exFAT silently fails); /media = the audio files themselves
+  # (the adapter streams + scans it; the brain never touches it).
+  env:
+    MOAIC_KNOWLEDGE_BASE: /data
+    MOAIC_IAM_STATE: /data/iam-state.json
+    # Identity / auth (ADR 0012): values never live in the repo — each is a
+    # Kubernetes Secret (name = the env var lowercased, key = the env var);
+    # a missing secret fails the affected surface soft, never the pod.
+    MOAIC_JWT_SECRET: { secret: true }
+    MOAIC_ADMIN_PASSWORD: { secret: true }
+    # The ASK adapter sidecar's credential (editor: runs the ask /
+    # resolve-play workflows + POSTs /api/ops/reindex after a scan).
+    MOAIC_ADAPTER_TOKEN: { secret: true }
+    # The voice brain's LLM (the in-house vLLM, same model family as the
+    # bible app). Without it the workflows fail soft (typed error, no
+    # network hang) — the adapter falls back to its deterministic resolver.
+    MOAIC_CHAT_API_KEY: { secret: true }
+    # The deterministic 256-dim local embedder (pure Rust, no key, no
+    # network) — the hybrid vector leg for the small media/sermons corpora.
+    MOAIC_EMBED_LOCAL: "1"
+    # The bible app's knowledge MCP (default-deny there; the static reader
+    # bearer lives in MOAIC_MCP_BIBLE_AUTH, presented as Bearer by the
+    # generated MCP client — never inlined).
+    MOAIC_MCP_BIBLE_URL: "https://bible.eisler-systems.de/mcp"
+    MOAIC_MCP_BIBLE_AUTH: { secret: true }
+  mcp:
+    servers:
+      - name: bible
+        about: "The bible app's knowledge MCP server — scripture_passage / scripture_translations / scripture_books / search_knowledge over 500+ translation and commentary modules."
+        env: MOAIC_MCP_BIBLE_URL
+        auth_env: MOAIC_MCP_BIBLE_AUTH
+  deploys:
+    - name: li7
+      target: k8s
+      namespace: aria
+      hosts:
+        - aria.eisler-systems.de
+      ingress_class: traefik
+      tls_issuer: letsencrypt-prod
+      # The assistant chat + A2A stream over SSE.
+      proxy_buffering: off
+      db:
+        name: aria
+        engine: sqlite
+      vector:
+        name: aria-vec
+        engine: lancedb
+      resources:
+        cpu: "2"
+        # The corpora are small (a few thousand metadata records + a couple
+        # of hundred sermon scripts) — the boot peak is a fraction of the
+        # bible app's. The adapter sidecar is co-resident (deploy/li7/
+        # inject-sidecars.py) but light (no corpus of its own).
+        memory: "6Gi"
+
+# ADR 0017: the voice brain's LLM — deepseek-v4-flash on the in-house vLLM
+# (the datalab GPU box; MOAIC_CHAT_API_KEY carries the bearer, as on the
+# bible app). The built-in `chat` role is overridden, so the auto-derived
+# assistant / A2A / agents / aide surfaces AND the workflow llm/agent nodes
+# all pick it up.
+model_registry:
+  - name: chat
+    about: "In-house vLLM chat (deepseek-v4-flash) — the voice brain."
+    provider: CHAT
+    model: deepseek-v4-flash
+    base_url: "https://gpu.datalab.siemens.com/vllm/v1"
+    chat: true
+
+persistence:
+  backend: sqlite
+
+# Default-deny (ADR 0012): only the fixed infra set is public (/health,
+# /readyz, /openapi.json, /api/auth/login). The Alexa-facing /alexa +
+# /stream/* + /art/* routes are NOT on this app — the adapter sidecar serves
+# them (unguessable 48-hex tokens are their auth); the ingress splits the
+# paths (deploy/li7/inject-sidecars.py). Everything here needs the `adapter`
+# service account (loopback sidecar), the `admin` user (ops), or a human
+# JWT (the web /chat lens).
+identity:
+  users:
+    admin:
+      about: "The app operator (ops, reindex, sources, the web chat lens)."
+      role: admin
+      password_env: MOAIC_ADMIN_PASSWORD
+      realm: { user: admin }
+  service_accounts:
+    adapter:
+      about: "The ASK adapter sidecar (same pod, loopback): runs the `ask` + `resolve-play` workflows (the `update` action on `app`) and POSTs /api/ops/reindex after a library scan. Editor — no admin, no user writes."
+      role: editor
+      token_env: MOAIC_ADAPTER_TOKEN
+
+# ---- the two knowledge collections ----------------------------------------
+vector_dbs:
+  # The playable catalog. `kind: entries` = free-form structured JSONL: one
+  # entry per line, the record's `text` is the retrieval text, `slug` pins
+  # the stable entry id, EVERY other field rides along in `meta` — so
+  # POST /api/vectordb/media/search takes `meta` filters (kind_media,
+  # collection, artist, album, book, …) and the resolve-play workflow feeds
+  # the candidates' meta straight to the deciding LLM.
+  #
+  # The file is GENERATED, not authored: the adapter's `scan` subcommand
+  # walks the [collections] roots (music / audiobooks / sermon audio), reads
+  # the tags with lofty, and writes a deterministic gzip of these records.
+  # A small committed sample stands in for e2e + a fresh boot before the
+  # first scan (the delta manifest (ADR 0019) merges, never duplicates).
+  - name: media
+    about: "The owner's own media collections — one metadata record per track, album, artist, radio preset, audiobook, audiobook chapter and sermon recording (adapter-scan generated, kind: entries). Playable metadata in `meta`: kind_media, collection, artist, album, book, narrator, file, duration_ms, slug."
+    sources:
+      - path: knowledge/media
+        kind: entries
+    # The catalog is machine-generated, not versioned content — no git
+    # change-entries (K11) and no code-symbol mining.
+    strategy:
+      git: false
+      changes: false
+      symbols: false
+    hybrid:
+      vector_weight: 0.7
+      bm25_weight: 0.3
+    retrieval:
+      mode: hybrid
+      top_k: 8
+    surfaces:
+      rest: { thesis: false }
+      mcp: { thesis: false }
+  # The sermon + seminar SCRIPTS (content RAG). Synced flat from the
+  # eugeis/sermons repo (tools/sync-sermons.sh — the bible pattern: images
+  # stripped, author-side markers untouched); the committed sample below is
+  # for e2e + a fresh boot. This is what the assistant QUOTES when asked
+  # "what did the sermon on grace say"; the playable recordings live in
+  # `media` (kind_media: sermon).
+  - name: sermons
+    about: "The owner's sermon and seminar scripts as searchable markdown (eugeis/sermons, synced flat) — content RAG for quoting, summarizing and discussing what a sermon says."
+    sources:
+      - path: knowledge/sermons
+        kind: docs
+    # Synced content, not this repo's history — no git change-entries.
+    strategy:
+      git: false
+      changes: false
+      symbols: false
+    hybrid:
+      vector_weight: 0.7
+      bm25_weight: 0.3
+    retrieval:
+      mode: hybrid
+      top_k: 4
+    surfaces:
+      rest: { thesis: false }
+      mcp: { thesis: false }
+
+parts:
+  - name: aria
+    group: app
+    about: "The voice brain: the `ask` + `resolve-play` workflows (the adapter's loopback API) + the e2e suite."
+    nested:
+      - kind: test
+        name: aria_app
+        app_e2e:
+          binary: "aria"
+          port: 3412
+          # Liveness: the corpus boots in the background (ADR 0100) —
+          # /health answers once the process is up; the harness then waits
+          # for /readyz itself (the sample corpus is small: seconds).
+          health: "/health"
+          ready_timeout_ms: 120000
+          env:
+            MOAIC_JWT_SECRET: "e2e-aria-secret"
+            MOAIC_ADMIN_PASSWORD: "e2e-admin-pw"
+            MOAIC_ADAPTER_TOKEN: "e2e-adapter-token"
+            # The local embedder (no key, no network) — the hybrid leg.
+            MOAIC_EMBED_LOCAL: "1"
+            # O10 cassette REPLAY: the committed recording of the exact LLM
+            # calls these scenarios make (recorded once against a mock
+            # provider — hermetic CI, no network, byte-stable). The base URL
+            # points at a dead local port ON PURPOSE: a matching cassette key
+            # never touches it, and a missing/mismatched key fails fast with
+            # connection-refused instead of hitting (and re-recording from) a
+            # real provider.
+            MOAIC_CHAT_API_KEY: "e2e-cassette"
+            MOAIC_CHAT_BASE_URL: "http://127.0.0.1:9/v1"
+            MOAIC_LLM_CASSETTE: "knowledge/cassettes/aria-llm.json"
+          scenarios:
+            # — auth: default-deny (ADR 0012) —
+            - name: media_search_requires_auth
+              method: POST
+              path: "/api/vectordb/media/search"
+              body: '{"query": "queen"}'
+              assert_status: 401
+            # — the playable catalog (the scan-generated `entries` KB) —
+            - name: media_search_finds_the_track
+              method: POST
+              path: "/api/vectordb/media/search"
+              service_account: adapter
+              body: '{"query": "Bohemian Rhapsody", "top_k": 3}'
+              assert_status: 200
+              assert_contains: "Bohemian Rhapsody"
+            - name: media_search_meta_filter_kind
+              method: POST
+              path: "/api/vectordb/media/search"
+              service_account: adapter
+              body: '{"query": "psalm", "top_k": 5, "meta": {"kind_media": "chapter"}}'
+              assert_status: 200
+              assert_contains: "kind_media"
+            # — the sermon content KB (the markdown scripts) —
+            - name: sermons_search_finds_the_script
+              method: POST
+              path: "/api/vectordb/sermons/search"
+              service_account: adapter
+              body: '{"query": "grace", "top_k": 3}'
+              assert_status: 200
+              assert_contains: "Grace"
+            # — the brain: the ask workflow (cassette-replayed LLM) —
+            - name: ask_workflow_answers
+              method: POST
+              path: "/api/workflows/ask/run"
+              service_account: adapter
+              body: '{"utterance": "what is playing on my heart right now?", "device": "e2e-echo"}'
+              assert_status: 200
+              assert_contains: "e2e-answer"
+            # — the brain: resolve-play (search + the deciding LLM) —
+            - name: resolve_play_picks_the_track
+              method: POST
+              path: "/api/workflows/resolve-play/run"
+              service_account: adapter
+              body: '{"query": "bohemian rhapsody"}'
+              assert_status: 200
+              assert_contains: "trk:0001"
+            # — the brain: resolve-play refuses to invent (cassette says
+            #   `none` for an unknown query) —
+            - name: resolve_play_none_for_unknown
+              method: POST
+              path: "/api/workflows/resolve-play/run"
+              service_account: adapter
+              body: '{"query": "the sound of silence by pink floyd"}'
+              assert_status: 200
+              assert_contains: "none"
+            # — the bible MCP client fails CLOSED when unconfigured (e2e
+            #   has no MOAIC_MCP_BIBLE_URL) — the typed error names the var —
+            - name: mcp_client_fails_closed_unconfigured
+              method: GET
+              path: "/api/mcp/bible/tools"
+              service_account: adapter
+              assert_status: 500
+              assert_contains: "MOAIC_MCP_BIBLE_URL"
+
+workflows:
+  # One voice turn: the adapter forwards the transcript (AskIntent /
+  # FallbackIntent) and speaks the answer. The agent's tools ground it: the
+  # two local KBs (media metadata, sermon scripts) + the bible app's MCP
+  # (passages, search). Short answers — they are heard, not read.
+  - name: ask
+    about: "One voice turn from the Alexa adapter: the LLM answers for the voice (grounded in the media + sermons collections and the Bible app's MCP tools). The adapter speaks the result as SSML."
+    nodes:
+      - type: start
+        id: start_1
+        props:
+          title: Start
+          variables:
+            - name: utterance
+              ty: String
+              about: "The user's spoken request (the Alexa STT transcript)."
+            - name: device
+              ty: String
+              optional: true
+              about: "The Echo device id (context only — memory is per-conversation, not per-device, in v1)."
+      - type: agent
+        id: brain
+        props:
+          title: Answer for the voice
+          goal: "The user just said: {{utterance}}"
+          system: |
+            You are Aria, the owner's personal voice assistant, heard through an
+            Amazon Echo. Your answer is SPOKEN by a text-to-speech engine: one to
+            three short, conversational sentences — no markdown, no lists, no
+            code, no citation numbers. Use your tools when they help: search the
+            owner's own media collections (tracks, albums, artists, radio,
+            audiobooks, sermon recordings), search his sermon and seminar
+            scripts, and read Bible passages or search the whole Bible through
+            the bible tools (when you read a verse, speak its text plainly and
+            name the reference at the end). If a tool does not answer, say so in
+            one sentence instead of guessing. Never invent titles, verses,
+            authors or facts.
+          model:
+            model: chat
+          max_turns: 4
+          tools: |
+            [
+              {"name": "search_media", "description": "Search the owner's own media collections (tracks, albums, artists, radio presets, audiobooks with chapters, sermon recordings). Returns metadata records (kind_media, entry, artist, album, book, file, duration_ms, slug).", "input": {"type": "object", "properties": {"query": {"type": "string", "description": "What to look for."}}, "required": ["query"]}, "knowledge": {"collection": "media", "top_k": 8}},
+              {"name": "search_sermons", "description": "Search the TEXT of the owner's sermon and seminar scripts (themes, quotes, content).", "input": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}, "knowledge": {"collection": "sermons", "top_k": 4}},
+              {"name": "bible_passage", "description": "Read an ordered passage from the Bible app (500+ translations incl. german-schlachter2000, russian-synodal, english-kj; commentaries ride the same surface). Returns the verse texts in order.", "input": {"type": "object", "properties": {"translation": {"type": "string", "description": "e.g. english-kj, german-schlachter2000, russian-synodal."}, "book": {"type": "string", "description": "Book number (1=Genesis .. 66=Revelation) or OSIS code (Exod, Psal, John)."}, "chapter": {"type": "number"}, "verse_from": {"type": "number"}, "verse_to": {"type": "number"}}, "required": ["translation", "book", "chapter"]}, "mcp": {"server": "bible", "tool": "scripture_passage"}},
+              {"name": "bible_search", "description": "Full-text search over the Bible app's translations and commentaries (meta-filter by translation/language/book).", "input": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}, "mcp": {"server": "bible", "tool": "search_knowledge"}}
+            ]
+      - type: end
+        id: end_1
+        props:
+          title: End
+          outputs:
+            - name: answer
+              ty: String
+              default: "brain.output"
+    edges:
+      - { from: start_1, to: brain }
+      - { from: brain, to: end_1 }
+
+  # "Play X" resolution for the adapter's FALLBACK path (the adapter tries
+  # its own deterministic resolver first — radio preset, album / artist /
+  # genre exact, fuzzy — and only lands here when that misses or the query
+  # is natural-language). One search over the metadata KB + one structured
+  # LLM decision. The adapter plays whatever comes back by `slug`; on
+  # `action: none` it escalates to the `ask` workflow (the answer is spoken).
+  - name: resolve-play
+    about: "Resolves a play request against the media collection: a search over the scan-generated metadata + one structured LLM decision. Output: {action, slug, reason} — the slug is a media record slug (trk:/alb:/art:/rad:/abk:/serm:), action `none` = nothing matched."
+    nodes:
+      - type: start
+        id: start_1
+        props:
+          title: Start
+          variables:
+            - name: query
+              ty: String
+              about: "The play request (e.g. 'bohemian rhapsody', 'the psalms audiobook', 'something for working out')."
+      - type: search
+        id: find
+        props:
+          title: Search the media metadata
+          collection: media
+          query: "{{query}}"
+          top_k: 12
+      - type: llm
+        id: decide
+        props:
+          title: Decide what to play
+          model:
+            model: chat
+        json_schema: '{"type": "object", "properties": {"action": {"type": "string"}, "slug": {"type": "string"}, "reason": {"type": "string"}}, "required": ["action", "reason"]}'
+        prompt:
+          - role: system
+            content: |
+              You resolve a play request for a personal media player. You get
+              the user's query and candidate metadata records (JSON) from the
+              owner's collections. Each record has: slug, kind_media (track |
+              album | artist | radio | audiobook | chapter | sermon), entry
+              (the title), plus artist / album / book / collection / file /
+              duration_ms / url where present. Pick the single best match for
+              what the user wants to HEAR. Prefer a concrete playable item
+              (track, chapter, sermon recording, radio) over an umbrella one
+              (album, artist, audiobook) when the user named a title. Respond
+              with JSON only: {"action": <the chosen record's kind_media>,
+              "slug": <its slug>, "reason": <one short clause>}. If NOTHING in
+              the candidates plausibly matches, respond {"action": "none",
+              "slug": "", "reason": <one short clause>}. Never invent a slug
+              that is not in the candidates.
+          - role: user
+            content: "Query: {{query}}\n\nCandidates: {{results}}"
+      - type: end
+        id: end_1
+        props:
+          title: End
+          outputs:
+            - name: action
+              ty: String
+              default: "decide.output.action"
+            - name: slug
+              ty: String
+              default: "decide.output.slug"
+            - name: reason
+              ty: String
+              default: "decide.output.reason"
+    edges:
+      - { from: start_1, to: find }
+      - { from: find, to: decide }
+      - { from: decide, to: end_1 }
