@@ -33,7 +33,7 @@ your own sermons and seminar scripts, and a grounded LLM for everything else.
 
 | You say | What happens |
 |---|---|
-| "Alexa, ask aria to play bohemian rhapsody" | Deterministic library resolve (album/artist/genre/fuzzy) → streams the MP3 |
+| "Alexa, mein aria, spiel bohemian rhapsody" | Deterministic library resolve (album/artist/genre/fuzzy) → streams the MP3 |
 | "…play queen" / "…play rock" | Artist / genre queue (shuffle-aware) |
 | "…play psalmen" | The audiobook, from chapter one |
 | "…continue psalmen" | Resumes the device's last chapter + offset |
@@ -41,13 +41,14 @@ your own sermons and seminar scripts, and a grounded LLM for everything else.
 | "…play something for working out" | The brain resolves it against your scan metadata (LLM + RAG) |
 | "…play psalm 23" / "…play the sermon on grace" | Verse text (bible app) / your sermon recording, spoken or streamed |
 | "…what did the sermon on grace say about receiving?" | Grounded answer over your sermon scripts |
-| "…ask aria what is the weather" / anything else | The LLM brain (grounded in your collections + the Bible app) |
+| "…frage: was ist das wetter" / anything else | The LLM brain (grounded in your collections + the Bible app) |
 | play / pause / stop / next / previous / jump to 2 minutes, shuffle, repeat one / all / off | The standard playback controls |
 
 > **Honest caveat:** a custom skill cannot take over the built-in
-> "Alexa, play X" (that requires being a certified music service). The
-> invocation is **"ask aria to …"** — once you're in the skill, the plain
-> playback words work.
+> "Alexa, spiel X" (that requires being a certified music service). The
+> invocation is **"mein aria …"** (en-US: "my aria …") — Amazon requires at
+> least two words, and it is fixed once the skill is published. Say it
+> first, then the command: "Alexa, mein aria, spiel …" / "…frage: …".
 
 ## Repository layout (the bible shape)
 
@@ -195,8 +196,8 @@ caveat above). One-time console setup at [developer.amazon.com](https://develope
    (`skill/interaction-model.json`) and de-DE
    (`skill/interaction-model-de-DE.json`). In the console select the
    locale, open the **JSON editor** tab, and paste the matching file
-   (invocation name `aria`; PlayMusicIntent + AskIntent + shuffle/repeat/
-   seek + the playback controllers + notifiers + Fallback). If your Echo is
+    (invocation name `mein aria`; PlayMusicIntent + AskIntent + shuffle/repeat/
+    seek + the playback controllers + notifiers + Fallback). If your Echo is
    set to German, the **de-DE** locale is the one that matters — an
    en-US-only skill will not match on a German device.
 4. **Manifest / publishing info**: under each locale set name *Aria* and
@@ -219,7 +220,7 @@ caveat above). One-time console setup at [developer.amazon.com](https://develope
    needed for a personal skill; it works on your own account's Echo devices
    immediately. (Publishing to Production is optional and only makes sense
    for other people's accounts.)
-8. On the Echo: "Alexa, open aria" or "Alexa, ask aria to play …".
+ 8. On the Echo: "Alexa, öffne mein aria" or "Alexa, mein aria, spiel …".
 
 ## Roadmap
 
