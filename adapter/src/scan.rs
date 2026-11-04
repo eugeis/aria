@@ -45,7 +45,7 @@ pub fn build_records(library: &Library, cfg: &Config) -> Vec<serde_json::Value> 
         m.insert("url".into(), j(&url));
         recs.push(record(
             format!("rad:{}", slugify(name)),
-            &format!("{name} — internet radio station"),
+            &format!("{name} — Internetradio-Station"),
             m,
         ));
     }
@@ -91,7 +91,7 @@ pub fn build_records(library: &Library, cfg: &Config) -> Vec<serde_json::Value> 
                 ),
                 "chapter",
                 format!(
-                    "{} — {} ({}: chapter {})",
+                    "{} — {} ({}: Kapitel {})",
                     t.title,
                     t.book,
                     t.book,
@@ -101,7 +101,7 @@ pub fn build_records(library: &Library, cfg: &Config) -> Vec<serde_json::Value> 
             CollectionKind::Sermon => (
                 format!("serm:{:04}", t.id),
                 "sermon",
-                format!("{} — sermon recording", t.title),
+                format!("{} — Predigtaufnahme", t.title),
             ),
         };
 
@@ -174,7 +174,7 @@ pub fn build_records(library: &Library, cfg: &Config) -> Vec<serde_json::Value> 
         m.insert("tracks".into(), j(&n));
         recs.push(record(
             format!("alb:{}", slugify(album)),
-            &format!("{album} — {artist}, {n} tracks"),
+            &format!("{album} — Album von {artist}, {n} Titel"),
             m,
         ));
     }
@@ -198,7 +198,7 @@ pub fn build_records(library: &Library, cfg: &Config) -> Vec<serde_json::Value> 
         m.insert("tracks".into(), j(&tracks_n));
         recs.push(record(
             format!("art:{}", slugify(&artist_name)),
-            &format!("{artist_name} — {collection}, {albums_n} album(s), {tracks_n} track(s)"),
+            &format!("{artist_name} — Sammlung {collection}, {albums_n} Alben, {tracks_n} Titel"),
             m,
         ));
     }
@@ -212,9 +212,9 @@ pub fn build_records(library: &Library, cfg: &Config) -> Vec<serde_json::Value> 
         }
         m.insert("chapters".into(), j(&chapters));
         let text = if narrator.is_empty() {
-            format!("{book} — audiobook, {chapters} chapters")
+            format!("{book} — Hörbuch, {chapters} Kapitel")
         } else {
-            format!("{book} — audiobook, {chapters} chapters, gelesen von {narrator}")
+            format!("{book} — Hörbuch, {chapters} Kapitel, gelesen von {narrator}")
         };
         recs.push(record(format!("abk:{}", slugify(book)), &text, m));
     }
