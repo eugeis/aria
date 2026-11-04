@@ -67,6 +67,9 @@ app:
     # soft (typed error, no network hang) — the adapter falls back to its
     # deterministic resolver.
     MOAIC_CHAT_API_KEY: { secret: true }
+    # The in-house vLLM bearer (dev/data-prep surface only — see the
+    # chat-vllm registry entry). Missing = that surface fails soft.
+    MOAIC_VLLM_API_KEY: { secret: true }
     # The deterministic 256-dim local embedder (pure Rust, no key, no
     # network) — the hybrid vector leg for the small media/sermons corpora.
     MOAIC_EMBED_LOCAL: "1"
@@ -129,8 +132,11 @@ model_registry:
     base_url: "https://openrouter.ai/api/v1"
     chat: true
   - name: chat-vllm
-    about: "In-house vLLM (deepseek-v4-flash) — development + data preparation only; NOT wired into any workflow. On li7 it is reached through the loopback tunnel (vllm-pod-bridge + hostAliases — deploy/li7/SECRETS.md)."
-    provider: CHAT
+    # Own provider family (VLLM, not CHAT): the box enforces its own bearer
+    # on /chat/completions, so it needs its own key env (MOAIC_VLLM_API_KEY)
+    # — the CHAT family's key is the OpenRouter key and gets a 401 there.
+    about: "In-house vLLM (deepseek-v4-flash on the datalab GPU box) — development + data preparation; NOT wired into any workflow (voice runs on OpenRouter within the 8-s budget). Key: MOAIC_VLLM_API_KEY (the box's bearer — re-issue it on the GPU box when needed). On li7 it is reached through the loopback tunnel (vllm-pod-bridge + hostAliases — deploy/li7/SECRETS.md)."
+    provider: VLLM
     model: deepseek-v4-flash
     base_url: "https://gpu.datalab.siemens.com:8902/vllm/v1"
     chat: true
@@ -319,7 +325,7 @@ workflows:
   # two local KBs (media metadata, sermon scripts) + the bible app's MCP
   # (passages, search). Short answers — they are heard, not read.
   - name: ask
-    about: "One voice turn from the Alexa adapter: the LLM answers for the voice (grounded in the media + sermons collections and the Bible app's MCP tools). The adapter speaks the result as SSML."
+    about: "One voice turn from the Alexa adapter: the LLM answers for the voice (grounded in the media + sermons collections and the Bible app's MCP tools). The adapter speaks the result as SSML. OpenRouter (chat): Alexa's endpoint must answer in 8 s — measured, v4-flash does the two-round tool pattern in ~3 s from li7, so the remote LLM fits the budget; the agent is capped at 3 calls + one-tool-call discipline to stay there (a runaway search loop is what produces empty answers)."
     nodes:
       - type: start
         id: start_1
@@ -349,10 +355,12 @@ workflows:
             the bible tools (when you read a verse, speak its text plainly and
             name the reference at the end). If a tool does not answer, say so in
             one sentence instead of guessing. Never invent titles, verses,
-            authors or facts.
+            authors or facts. Be efficient: at most ONE tool call in total,
+            then answer directly with what you have — the answer is spoken
+            within 8 seconds.
           model:
             model: chat
-          max_turns: 4
+          max_turns: 3
           tools: |
             [
               {"name": "search_media", "description": "Search the owner's own media collections (tracks, albums, artists, radio presets, audiobooks with chapters, sermon recordings). Returns metadata records (kind_media, entry, artist, album, book, file, duration_ms, slug).", "input": {"type": "object", "properties": {"query": {"type": "string", "description": "What to look for."}}, "required": ["query"]}, "knowledge": {"collection": "media", "top_k": 8}},
@@ -379,7 +387,7 @@ workflows:
   # LLM decision. The adapter plays whatever comes back by `slug`; on
   # `action: none` it escalates to the `ask` workflow (the answer is spoken).
   - name: resolve-play
-    about: "Resolves a play request against the media collection: a search over the scan-generated metadata + one structured LLM decision. Output: {action, slug, reason} — the slug is a media record slug (trk:/alb:/art:/rad:/abk:/serm:), action `none` = nothing matched."
+    about: "Resolves a play request against the media collection: a search over the scan-generated metadata + one structured LLM decision. Output: {action, slug, reason} — the slug is a media record slug (trk:/alb:/art:/rad:/abk:/serm:), action `none` = nothing matched. OpenRouter (chat) — one LLM call after the search, well inside the 8-s voice budget."
     nodes:
       - type: start
         id: start_1
