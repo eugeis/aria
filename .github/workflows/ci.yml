@@ -22,7 +22,7 @@ jobs:
     # ADR 0012 default-deny access model). Self-hosted (a private repo cannot
     # use GitHub-hosted runners) — the li7 runner, labeled `aria`.
     name: brain (render + build + e2e)
-    runs-on: [self-hosted, li7, aria]
+    runs-on: [self-hosted, li7]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -55,7 +55,7 @@ jobs:
     # state machine, the streaming edge cases, the scanner + deterministic
     # gzip, the brain-bridge config).
     name: adapter (tests)
-    runs-on: [self-hosted, li7, aria]
+    runs-on: [self-hosted, li7]
     defaults:
       run:
         working-directory: adapter

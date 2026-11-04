@@ -6,18 +6,27 @@
 #     2. builds + imports both images into k3s:
 #          mosaic/aria:<sha>      (the rendered brain)
 #          mosaic/aria-ask:<sha>  (the hand-written ASK surface)
-#     3. injects the li7-only glue (aria-ask sidecar, media hostPath,
-#        service ports, ingress path split) into the rendered helm chart
+#     3. injects ALL the li7-only glue into the rendered helm chart — the
+#        aria-ask sidecar, the hostPath mounts (/media, /data, /vector),
+#        the service ports, the ingress path split, the no-surge rollout
+#        strategy and the vLLM hostAlias. ONE helm upgrade is final: no
+#        post-helm kubectl patch (a second template mutation spawns a
+#        second ReplicaSet and deadlocks the rollout on this memory-tight
+#        node — the pod and its replacement may never both be scheduled).
 #     4. creates the namespace + secrets (values from files on the runner —
 #        see deploy/li7/SECRETS.md)
-#     5. helm upgrade --install + the hostPath strategic-merge patch
-#        (data + vector on ext4 host paths — LanceDB cannot commit on exFAT)
+#     5. helm upgrade --install (hostPaths on ext4 — LanceDB cannot commit
+#        on exFAT)
 #
 # Prereqs on li7 (see deploy/li7/SECRETS.md):
 #   /var/lib/aria-data      ext4 host dir (brain corpus + persist seam + sqlite)
 #   /var/lib/aria-lancedb   ext4 host dir (the LanceDB vector store)
 #   /var/lib/aria-media     the audio collections (music / bible-audio / sermons-audio)
 #   the secret files under /home/ee/.ssh/ (aria-*)
+#   vllm-pod-bridge.service running (the vLLM tunnel is loopback-only on the host)
+#   a runner registered in THIS repo (label "li7") — the li7 machine already
+#   runs one each for eugeis/mosaic, -bible and -mosaic-pages; register a
+#   fourth for eugeis/aria (same machine; docker/k3s/helm are present)
 
 name: deploy
 
@@ -29,17 +38,9 @@ on:
         required: true
         default: main
       chat_base_url:
-        description: Override the brain's LLM base URL (empty = the tessera registry value; on li7 this is the reverse-SSH tunnel to the vLLM box, e.g. http://127.0.0.1:8902/v1)
+        description: Override the brain's LLM base URL (empty = the li7 tunnel value below; the host paths are fixed in deploy/li7/inject-sidecars.py — see SECRETS.md)
         required: false
         default: ""
-      host_data_path:
-        description: Host path (POSIX fs) mounted at /data in both containers
-        required: false
-        default: "/var/lib/aria-data"
-      vector_data_path:
-        description: Host path (POSIX fs — NOT exFAT) mounted at /vector (the LanceDB store)
-        required: false
-        default: "/var/lib/aria-lancedb"
 
 concurrency:
   group: onprem-aria
@@ -56,8 +57,7 @@ env:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, linux, k3s, li7, mosaic-onprem]
-    environment: onprem
+    runs-on: [self-hosted, li7]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -184,8 +184,6 @@ jobs:
         env:
           CHART: "$RUNNER_TEMP/aria-rendered/deploy/li7/helm"
           IMAGE: "mosaic/aria:${{ steps.imagetag.outputs.tag }}"
-          HOST_DATA_PATH: ${{ inputs.host_data_path }}
-          VECTOR_DATA_PATH: ${{ inputs.vector_data_path }}
           CHAT_BASE_URL: ${{ inputs.chat_base_url }}
         run: |
           set -euo pipefail
@@ -193,6 +191,8 @@ jobs:
           if [ -n "$CHAT_BASE_URL" ]; then
             chat_args+=(--set "env.MOAIC_CHAT_BASE_URL=$CHAT_BASE_URL")
           fi
+          # On li7 the chat base URL is the tunnel (hostAliases + the
+          # vllm-pod-bridge socat make it pod-visible — SECRETS.md).
           helm upgrade --install "$RELEASE" "$CHART" \
             --namespace "$NAMESPACE" \
             --create-namespace \
@@ -202,51 +202,12 @@ jobs:
             --set dataPvc.enabled=false \
             --set "env.MOAIC_DB_PATH=/data/app.db" \
             --set "env.MOSAIC_VECTOR_BACKEND=lancedb" \
-            --set "env.MOSAIC_VECTOR_URL=/data/lancedb" \
+            --set "env.MOSAIC_VECTOR_URL=/vector" \
+            --set "env.MOAIC_CHAT_BASE_URL=https://gpu.datalab.siemens.com:8902/vllm/v1" \
             "${chat_args[@]}"
-          # The rendered chart has no PVC (dataPvc off) — the persistent
-          # state is hostPath-mounted. The strategic-merge patch (a) adds the
-          # host volumes, (b) mounts /data in BOTH containers (the brain
-          # ingests knowledge/media from it; the adapter publishes the scan
-          # there) and /vector in the brain (LanceDB must be on a POSIX fs —
-          # its commit protocol linkat's, exFAT silently fails), re-applying
-          # it after EVERY helm upgrade (an upgrade reverts it).
-          cat > "$RUNNER_TEMP/host-patch.json" <<JSON
-          {
-            "spec": {
-              "template": {
-                "spec": {
-                  "volumes": [
-                    { "name": "host-data", "hostPath": { "path": "$HOST_DATA_PATH", "type": "Directory" } },
-                    { "name": "host-vector", "hostPath": { "path": "$VECTOR_DATA_PATH", "type": "Directory" } }
-                  ],
-                  "containers": [
-                    {
-                      "name": "aria",
-                      "volumeMounts": [
-                        { "name": "host-data", "mountPath": "/data" },
-                        { "name": "host-vector", "mountPath": "/vector" }
-                      ]
-                    },
-                    {
-                      "name": "aria-ask",
-                      "volumeMounts": [
-                        { "name": "host-data", "mountPath": "/data" }
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          }
-          JSON
-          kubectl -n "$NAMESPACE" patch deployment "$RELEASE" --type=strategic --patch "$(cat "$RUNNER_TEMP/host-patch.json")"
-          # The brain's env must point the vector store at /vector (the
-          # helm --set above targeted /data/lancedb; the last-set env wins,
-          # so patch the container env too — same reversion reason as the
-          # volumes).
-          kubectl -n "$NAMESPACE" set env "deployment/$RELEASE" \
-            -c aria MOSAIC_VECTOR_URL=/vector
+          # NOTE: no post-helm kubectl patch. The injector (step above)
+          # baked the hostPath volumes/mounts into the chart template, so
+          # this upgrade IS the final pod spec.
 
       - name: Wait for the rollout + status
         run: |
@@ -255,7 +216,7 @@ jobs:
           kubectl -n "$NAMESPACE" get deployment,service,ingress
           kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/name=aria -o wide
 
-      - name: Smoke: the ASK surface answers
+      - name: "Smoke: the ASK surface answers"
         run: |
           set -uo pipefail
           # The skill endpoint must answer Amazon's test envelope with 200.
