@@ -102,7 +102,7 @@ app:
         # The corpora are TINY (a few thousand metadata records + a couple
         # of hundred sermon scripts — local embedder, milliseconds to boot);
         # 512 Mi covers steady state AND boot peak with margin. The adapter
-        # sidecar is co-resident (deploy/li7/inject-sidecars.py, 128 Mi
+        # sidecar is co-resident (deploy/li7/inject.rs, 128 Mi
         # requested) — together the pod asks for ~0.6 Gi.
         # NOTE: li7 is memory-tight (bible 51 Gi + pages 8 Gi + co-tenants
         # ≈ 61 Gi of 61.5 Gi allocatable). This size was chosen so the pod
@@ -142,7 +142,7 @@ persistence:
 # /readyz, /openapi.json, /api/auth/login). The Alexa-facing /alexa +
 # /stream/* + /art/* routes are NOT on this app — the adapter sidecar serves
 # them (unguessable 48-hex tokens are their auth); the ingress splits the
-# paths (deploy/li7/inject-sidecars.py). Everything here needs the `adapter`
+# paths (deploy/li7/inject.rs). Everything here needs the `adapter`
 # service account (loopback sidecar), the `admin` user (ops), or a human
 # JWT (the web /chat lens).
 identity:

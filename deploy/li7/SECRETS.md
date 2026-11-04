@@ -81,7 +81,7 @@ make it work (both re-created automatically if lost):
   ```
 * The chart's pod spec carries a `hostAliases` entry aliasing
   `gpu.datalab.siemens.com` → `192.168.11.63` (injected by
-  `inject-sidecars.py`, so a re-render never loses it). The TLS chain
+  `inject.rs`, so a re-render never loses it). The TLS chain
   validates strictly (the vLLM endpoint presents a cert for the domain).
 
 The tunnel session itself is the fragile part: it is an `ssh -R` from the

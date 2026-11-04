@@ -130,7 +130,7 @@ the tail.
 ## 6. Deployment (li7)
 
 One pod, two containers (the bible shape — a generated chart + li7-only
-glue injected by `deploy/li7/inject-sidecars.py`):
+glue injected by `deploy/li7/inject.rs`):
 
 - **aria** (the brain, port 3000): `/api/*`, `/mcp`, `/a2a`, `/chat` (web
   lens), `/readyz`…

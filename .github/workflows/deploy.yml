@@ -84,6 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo --version
+          rustc --version
           docker --version
           helm version --short
           kubectl cluster-info
@@ -128,7 +129,10 @@ jobs:
       - name: Inject the li7 glue into the rendered chart
         run: |
           set -euo pipefail
-          python3 deploy/li7/inject-sidecars.py \
+          # Single-file, std-only Rust — no python in the production
+          # tooling; `rustc -O` is the whole build.
+          rustc -O deploy/li7/inject.rs -o "$RUNNER_TEMP/aria-inject"
+          "$RUNNER_TEMP/aria-inject" \
             "$RUNNER_TEMP/aria-rendered/deploy/li7/helm" \
             "${{ steps.imagetag.outputs.tag }}"
 

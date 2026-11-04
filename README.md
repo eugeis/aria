@@ -72,7 +72,7 @@ skill/
   interaction-model.json  the Alexa intent model (import in the dev console)
   skill-manifest.json     the skill manifest (endpoint + AUDIO_PLAYER)
 deploy/li7/
-  inject-sidecars.py    injects the aria-ask sidecar + media hostPath + ingress
+  inject.rs           injects the aria-ask sidecar + media hostPath + ingress
                         split into the rendered helm chart
   SECRETS.md            the runner secret files + host dirs for li7
 .github/workflows/
@@ -164,7 +164,7 @@ Run workflow, `ref: main`). It:
 
 1. renders the brain with the pinned `MOSAIC_REV`,
 2. builds + imports `mosaic/aria:<sha>` and `mosaic/aria-ask:<sha>` into k3s,
-3. runs `deploy/li7/inject-sidecars.py` (sidecar + media hostPath + service
+3. runs `deploy/li7/inject.rs` (sidecar + media hostPath + service
    ports + the ingress path split: `/alexa`, `/stream`, `/art` → the adapter;
    everything else → the brain),
 4. creates the secrets + the cert-manager certificate for
