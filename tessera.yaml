@@ -347,12 +347,35 @@ workflows:
               ty: String
               optional: true
               about: "The Echo device id (context only — memory is per-conversation, not per-device, in v1)."
+      # List-type questions ("welche alben habe ich") need the STRUCTURAL
+      # record words (Alben/Titel/Sammlung) in the query — the raw
+      # conversational utterance only scores on vector noise. A code node
+      # rewrites such questions to structural keywords + the utterance;
+      # content questions pass through unchanged.
+      - type: code
+        id: classify
+        code: |
+          const u = String(start_1.utterance || "");
+          const LIST = [
+            ["alben|albums", "Alben Album Titel"],
+            ["sammlungen|collections|bibliothek", "Sammlung Alben Titel"],
+            ["k\u00fcnstler|kuenstler|artist|artists", "Titel Album Sammlung"],
+            ["titel|lieder|songs|tracks", "Titel Album"],
+            ["h\u00f6rbuch|horbuch|audiobook", "H\u00f6rbuch Kapitel"],
+            ["predigt|sermon", "Predigtaufnahme Titel"],
+            ["radio|station", "Internetradio-Station"],
+          ];
+          let q = u;
+          for (const [pat, kw] of LIST) {
+            if (new RegExp(pat, "i").test(u)) { q = kw + " " + u; break; }
+          }
+          return { search_query: q };
       - type: search
         id: find_media
         props:
           title: Search the media metadata
           collection: media
-          query: "{{utterance}}"
+          query: "{{search_query}}"
           top_k: 8
       - type: search
         id: find_sermons
@@ -413,7 +436,8 @@ workflows:
               ty: String
               default: "speak.output"
     edges:
-      - { from: start_1, to: find_media }
+      - { from: start_1, to: classify }
+      - { from: classify, to: find_media }
       - { from: find_media, to: find_sermons }
       - { from: find_sermons, to: merge }
       - { from: merge, to: speak }
