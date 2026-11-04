@@ -198,7 +198,7 @@ pub fn build_records(library: &Library, cfg: &Config) -> Vec<serde_json::Value> 
         m.insert("tracks".into(), j(&tracks_n));
         recs.push(record(
             format!("art:{}", slugify(&artist_name)),
-            &format!("{artist_name} — Sammlung {collection}, {albums_n} Alben, {tracks_n} Titel"),
+            &format!("{artist_name} — Künstler, Sammlung {collection}, {albums_n} Alben, {tracks_n} Titel"),
             m,
         ));
     }

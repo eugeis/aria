@@ -356,13 +356,16 @@ workflows:
         id: classify
         code: |
           const u = String(start_1.utterance || "");
+          // Structural words that occur in the scan-generated record TEXTS
+          // (scan.rs build_records) — the BM25 leg has no stemming, so the
+          // query must use the record's own words.
           const LIST = [
-            ["alben|albums", "Alben Album Titel"],
-            ["sammlungen|collections|bibliothek", "Sammlung Alben Titel"],
-            ["k\u00fcnstler|kuenstler|artist|artists", "Titel Album Sammlung"],
+            ["alben|albums", "Album Titel"],
+            ["sammlungen|collections|bibliothek", "Sammlung"],
+            ["k\u00fcnstler|kuenstler|artist|artists", "K\u00fcnstler"],
             ["titel|lieder|songs|tracks", "Titel Album"],
             ["h\u00f6rbuch|horbuch|audiobook", "H\u00f6rbuch Kapitel"],
-            ["predigt|sermon", "Predigtaufnahme Titel"],
+            ["predigt|sermon", "Predigtaufnahme"],
             ["radio|station", "Internetradio-Station"],
           ];
           let q = u;
@@ -390,18 +393,11 @@ workflows:
           // The flat payload is first-writer-wins, so the two searches'
           // `results` collide — this node reads the per-node outputs
           // (globals) directly and builds one context string.
-          const fmt = (r) => {
-            const m = r.meta || {};
-            const bits = [];
-            if (m.kind_media) bits.push(m.kind_media);
-            if (m.entry) bits.push(m.entry);
-            if (m.artist) bits.push(m.artist);
-            if (m.album) bits.push(m.album);
-            if (m.book) bits.push("book: " + m.book);
-            if (m.slug) bits.push(m.slug);
-            return bits.join(", ");
-          };
-          const media = (find_media.results || []).map(fmt).join("; ");
+          // The record's own retrieval text (r.text) carries the structural
+          // facts ("X — Künstler, Sammlung musik, 12 Alben, 55 Titel") —
+          // build the context from it, not from picked meta fields.
+          const fmt = (r) => (r.text || r.id || "") + " [" + ((r.meta || {}).slug || "") + "]";
+          const media = (find_media.results || []).map(fmt).join("\n");
           const sermons = (find_sermons.results || [])
             .map((r) => r.text || r.id || "").join(" | ");
           return {
@@ -422,9 +418,10 @@ workflows:
               You are Aria, the owner's personal voice assistant, heard through an
               Amazon Echo. Your answer is SPOKEN: one to three short, conversational
               sentences — no markdown, no lists, no code, no citation numbers.
-              Answer from the retrieved context below. If the context does not
-              answer the question, say so in one sentence instead of guessing.
-              Never invent titles, albums, authors or facts.
+              Answer ONLY from the retrieved context below — mention only names
+              and titles that appear in it. If the context does not answer the
+              question, say so in one sentence instead of guessing. Never invent
+              titles, albums, artists or facts.
           - role: user
             content: "The owner just said: {{utterance}}\n\nContext:\n{{context}}"
       - type: end
