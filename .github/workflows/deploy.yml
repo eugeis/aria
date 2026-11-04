@@ -49,7 +49,7 @@ env:
   CARGO_TERM_COLOR: always
   KUBECONFIG: /home/ee/.kube/config
   # Keep in lockstep with .github/workflows/ci.yml (the pinned generator).
-  MOSAIC_REV: 6ad1b49e8cd3e8d2ee95805bde18e67b8dc58aad
+  MOSAIC_REV: f1ecb68529fb3d8a8c23f70eeb9ceb3a6dc9def4
   NAMESPACE: aria
   RELEASE: aria
   HOST: aria.eisler-systems.de
@@ -201,17 +201,35 @@ jobs:
           # registry; the key rides MOAIC_CHAT_API_KEY). The chat_base_url
           # input overrides it (e.g. for a future self-hosted model box —
           # SECRETS.md).
-          helm upgrade --install "$RELEASE" "$CHART" \
-            --namespace "$NAMESPACE" \
-            --create-namespace \
-            --set image.repository="${IMAGE%:*}" \
-            --set image.tag="${IMAGE##*:}" \
-            --set image.pullPolicy=Never \
-            --set dataPvc.enabled=false \
-            --set "env.MOAIC_DB_PATH=/data/app.db" \
-            --set "env.MOSAIC_VECTOR_BACKEND=lancedb" \
-            --set "env.MOSAIC_VECTOR_URL=/vector" \
-            "${chat_args[@]}"
+          helm_upgrade() {
+            helm upgrade --install "$RELEASE" "$CHART" \
+              --namespace "$NAMESPACE" \
+              --create-namespace \
+              --set image.repository="${IMAGE%:*}" \
+              --set image.tag="${IMAGE##*:}" \
+              --set image.pullPolicy=Never \
+              --set dataPvc.enabled=false \
+              --set "env.MOAIC_DB_PATH=/data/app.db" \
+              --set "env.MOSAIC_VECTOR_BACKEND=lancedb" \
+              --set "env.MOSAIC_VECTOR_URL=/vector" \
+              "${chat_args[@]}"
+          }
+          if ! helm_upgrade; then
+            # The helm 3-way merge can choke when the stored release
+            # manifest differs structurally from the live object (e.g. the
+            # pre-f1ecb68 charts carried a bogus containers[0].strategy
+            # that the API server had silently dropped). A fresh CREATE
+            # needs no merge: drop the deployment, let the upgrade recreate
+            # it. (No surge strategy: the old pod goes first, the new one
+            # starts after it frees memory — a few minutes of downtime at
+            # most, on a personal-scale app.)
+            echo "::warning::helm merge failed — falling back to delete + create"
+            kubectl -n "$NAMESPACE" delete deployment "$RELEASE" --wait=false
+            sleep 5
+            kubectl -n "$NAMESPACE" delete pods --all --wait=false 2>/dev/null || true
+            sleep 10
+            helm_upgrade
+          fi
           # NOTE: no post-helm kubectl patch. The injector (step above)
           # baked the hostPath volumes/mounts into the chart template, so
           # this upgrade IS the final pod spec.

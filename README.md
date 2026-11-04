@@ -15,14 +15,15 @@ your own sermons and seminar scripts, and a grounded LLM for everything else.
                                               │  player state, scan │
                                               └─────────┬──────────┘
                        loopback REST (adapter token)    │
-                                              ┌─────────▼──────────┐
-                                              │  aria (the brain)  │  a Mosaic app (tessera.yaml)
-                                              │  `ask` +           │  ask = LLM agent over:
-                                              │  `resolve-play`    │   • media KB (your scan metadata)
-                                              │  workflows, RAG,   │   • sermons KB (your scripts)
-                                              │  MCP client ───────┼──> bible app's /mcp (verses, search)
-                                              │  identity, deploy  │   vLLM chat model (deepseek-v4-flash)
-                                              └────────────────────┘
+                                               ┌─────────▼──────────┐
+                                               │  aria (the brain)  │  a Mosaic app (tessera.yaml)
+                                               │  `ask` (chat mode) │  ask = RAG over:
+                                               │  `ask-bible` (agent│   • media KB (your scan metadata)
+                                               │  `resolve-play`    │   • sermons KB (your scripts)
+                                               │  workflows, RAG,   │  ask-bible = capped LLM agent ─┼──> bible app's /mcp
+                                               │  MCP client        │   OpenRouter deepseek-v4-flash │     (verses, search)
+                                               │  identity, deploy  │   (one call for ask;           │
+                                               └────────────────────┘    one tool round for ask-bible)
    Echo <──(Amazon TTS speaks our SSML)── ASK response + AudioPlayer.Play(url=/stream/{token})
 ```
 

@@ -161,22 +161,22 @@ const SVC_PORTS_NEW: &str = r"  ports:
       protocol: TCP
 ";
 
-const STRATEGY_OLD: &str = r"          strategy:
-            type: RollingUpdate
-            rollingUpdate:
-              maxSurge: 1
-              maxUnavailable: 0
+/// The rendered values.yaml declares the rollout strategy at its
+/// deployment-level defaults (zero-downtime surge 1 / unavailable 0). On
+/// li7 the node is memory-tight (bible ~51 Gi + pages ~8 Gi + co-tenants ≈
+/// 61 Gi of 61.5 Gi allocatable), so an old aria pod and its replacement
+/// may never both be scheduled — override to NO SURGE (0 / 1) here instead
+/// of touching the chart template (a template mutation after `helm upgrade`
+/// spawns a second ReplicaSet; values are part of the one upgrade).
+const VALUES_STRATEGY_OLD: &str = "strategy:
+  maxSurge: 1
+  maxUnavailable: 0
 ";
 
-const STRATEGY_NEW: &str = r"          strategy:
-            type: RollingUpdate
-            rollingUpdate:
-              # li7 (injected by inject.rs): the node is
-              # memory-tight (bible 51 Gi + pages 8 Gi + co-tenants ≈ 61 Gi
-              # of 61.5 Gi allocatable) — NO SURGE: an old aria pod and its
-              # replacement (~0.6 Gi each) may never both be scheduled.
-              maxSurge: 0
-              maxUnavailable: 1
+const VALUES_STRATEGY_NEW: &str = "strategy:
+  # li7 (injected by inject.rs): NO SURGE — see the constant's doc.
+  maxSurge: 0
+  maxUnavailable: 1
 ";
 
 const INGRESS_OLD: &str = r#"        paths:
@@ -314,14 +314,22 @@ fn main() {
         }
     }
 
-    if !original.contains("maxSurge: 0") {
-        if text.contains(STRATEGY_OLD) {
-            replace_once(&mut text, STRATEGY_OLD, STRATEGY_NEW);
-            println!("normalized the rollout strategy (no surge) into {dep:?}");
+    let values = helm_dir.join("values.yaml");
+    let mut vtext = fs::read_to_string(&values).unwrap_or_else(|e| {
+        eprintln!("ERROR: cannot read {values:?}: {e}");
+        exit(1);
+    });
+    if !vtext.contains("maxSurge: 0") {
+        if replace_once(&mut vtext, VALUES_STRATEGY_OLD, VALUES_STRATEGY_NEW) {
+            println!("normalized the rollout strategy (no surge) in {values:?}");
         } else {
-            println!("NOTE: strategy anchor not found in {dep:?} (chart changed?)");
+            println!("NOTE: strategy values anchor not found in {values:?} (chart changed?)");
         }
     }
+    fs::write(&values, &vtext).unwrap_or_else(|e| {
+        eprintln!("ERROR: cannot write {values:?}: {e}");
+        exit(1);
+    });
 
     // Write the deployment back (the sidecar + volumes + strategy +
     // steps all operated on the in-memory copy).

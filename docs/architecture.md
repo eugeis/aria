@@ -15,7 +15,7 @@ Rust; the folder collections became a RAG knowledge base.**
 | Per-device player state (queue/history/shuffle/repeat/resume) | `aria-ask` adapter | Driven by PlaybackController + PlaybackNotifier requests; a state machine, not a declarative aggregate (shuffles, offsets) |
 | Library scanning (lofty tags, folder semantics, collections) | `aria-ask` adapter | The only component that reads audio files (besides the Echo itself) |
 | Knowledge (media metadata RAG, sermon content RAG) | the brain (Mosaic `vector_dbs`) | `kind: entries` JSONL + `kind: docs` markdown; BM25 + local 256-dim vectors, meta filters, delta manifest |
-| The LLM turns (ask, resolve-play) | the brain (Mosaic workflows) | `agent` node (tools = the two KBs + the bible MCP) + `llm` node (structured decision) over the vLLM |
+| The LLM turns (ask, ask-bible, resolve-play) | the brain (Mosaic workflows) | **chat mode** (search nodes + one `llm` call) for RAG answers, **agent mode** (an `agent` node over the bible MCP, capped at one tool round) for Bible questions — all on OpenRouter |
 | The Bible (verses, translations, search) | the bible app (its `/mcp`) | 500+ modules already ingested there; consumed via the brain's MCP client (env-bound bearer) |
 | Identity, deploy, docs, MCP server, web chat, A2A | the brain (auto-derived) | A Mosaic app projects all of these from the tessera |
 
@@ -117,15 +117,29 @@ Alexa expects a skill response in ~8 s. The paths:
    resolver in µs, no LLM. (The LLM fallback for natural-language play
    requests budgets the same 7.5 s and degrades to "not found" — the
    deterministic path already ran first.)
-2. **Ask / Fallback** (free speech): `POST /api/workflows/ask/run` — one
-   `agent` turn (up to 4 tool rounds) on the vLLM model. On timeout/error
-   the adapter speaks a canned line; the brain's own errors are typed
-   (`{status: {body}}`) so the adapter can distinguish "unreachable" from
-   "brain error".
+2. **Ask / Fallback** (free speech): the adapter picks the **mode** by the
+   utterance —
+   * **Bible questions** (book names / "psalm" / "passage" / …, a cheap
+     term heuristic in the adapter) → `ask-bible`, **agent mode**: one
+     capped `agent` node over the bible MCP (`max_turns: 2` = one tool
+     round + the answer). The model must *choose* the passage parameters,
+     so it needs the tool loop — but capped, ~6 s worst case.
+   * **Everything else** → `ask`, **chat mode**: two `search` nodes
+     (media metadata + sermon scripts, both sub-second) → a `mapper` node
+     merges the two results → **one** `llm` call. No tool loop, no
+     runaway re-searching (that is what produced the 13 s empty answer),
+     ~3 s measured end-to-end.
 
-There is no partial-streaming (v1 had it against the ZeroClaw WS); the vLLM
-model is fast enough for short spoken answers, and the fallback lines cover
-the tail.
+   On timeout/error the adapter speaks a canned line; the brain's own
+   errors are typed (`{status: {body}}`) so the adapter can distinguish
+   "unreachable" from "brain error".
+
+All LLM calls run on OpenRouter (deepseek/deepseek-v4-flash — the
+best preis/leistung in the tool-calling tier; a voice turn costs ~half a
+cent). There is no vLLM: li7 has no access to the datalab GPU box.
+There is no partial-streaming (v1 had it against the ZeroClaw WS); one
+generation is fast enough for a short spoken answer, and the fallback
+lines cover the tail.
 
 ## 6. Deployment (li7)
 
@@ -150,10 +164,10 @@ in the adapter — the audio files). Secrets per `deploy/li7/SECRETS.md`
 | Failure | Behavior |
 |---|---|
 | Brain down (pod) | Adapter speaks "I can't reach my brain right now"; playback (deterministic) still works |
-| vLLM down | `ask` returns a typed brain error → canned line; `resolve-play` → "not found" (the deterministic path already ran) |
+| LLM down / OpenRouter credits exhausted | `ask` / `ask-bible` return a typed brain error → the adapter speaks a canned line; `resolve-play` → "not found" (the deterministic path already ran). Playback stays fully working |
 | Bible app down | The `ask` agent's bible tools fail per-call; the LLM answers from the local KBs or says it can't (the tools surface the error, the agent is told to admit it) |
 | Missing secret (MCP bearer) | The bible MCP calls fail closed with a typed error naming the env var |
-| Scan finds no files | Empty records published (idempotent); the KB keeps the previous corpus entries until a reindex with the new file (delta) |
+| Scan finds no files (empty media dir) | An empty scan **never publishes** — it cannot wipe the catalog the brain already has. The previous corpus stays until a real scan lands |
 | FLAC / unsupported file | Indexed (searchable), "not streamable to the Echo" when play is requested |
 | Wrong skill hitting `/alexa` | Empty 200 (client-id check) — no leakage, no error page |
 | Stream token expired (>12 h) | 404 → the device's PlaybackFailed advances the queue (the old behavior, kept) |
