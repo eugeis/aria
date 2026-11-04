@@ -133,11 +133,22 @@ async fn handle_agent_turn(state: &Arc<AppState>, device: &str, utterance: &str)
 
 /// Play-like prefixes a Fallback transcript can carry ("spiel X",
 /// "spiele X", "mach X an", "leg X auf") — returns the remaining query.
+/// The transcript may still carry the invocation name ("mein aria …"),
+/// which is stripped first.
 fn strip_play_prefix(u: &str) -> Option<String> {
-    let l = u.to_lowercase();
+    let mut s = u.trim();
+    let l = s.to_lowercase();
+    for inv in ["mein aria", "aria"] {
+        if let Some(rest) = l.strip_prefix(inv) {
+            s = s[inv.len()..].trim_start();
+            let _ = rest;
+            break;
+        }
+    }
+    let l = s.to_lowercase();
     for p in ["spiele ", "spiel ", "mach ", "leg "] {
         if l.starts_with(p) {
-            let q = u[p.len()..].trim();
+            let q = s[p.len()..].trim();
             if !q.is_empty() {
                 return Some(q.to_string());
             }
@@ -1095,5 +1106,20 @@ mod tests {
         assert!(resp.is_some(), "continue psalmen should start the book");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn strip_play_prefix_variants() {
+        assert_eq!(strip_play_prefix("spiel queen"), Some("queen".into()));
+        assert_eq!(strip_play_prefix("Spiele den Song Bohemian Rhapsody"), Some("den Song Bohemian Rhapsody".into()));
+        assert_eq!(strip_play_prefix("mach rock an"), Some("rock an".into()));
+        assert_eq!(strip_play_prefix("leg etwas ein"), Some("etwas ein".into()));
+        // Invocation name still in the transcript.
+        assert_eq!(strip_play_prefix("mein aria spiel queen"), Some("queen".into()));
+        assert_eq!(strip_play_prefix("aria spiele rock"), Some("rock".into()));
+        // Non-play transcripts are left alone (→ the agent turn).
+        assert_eq!(strip_play_prefix("frage welche alben habe ich"), None);
+        assert_eq!(strip_play_prefix("spiel"), None);
+        assert_eq!(strip_play_prefix("  "), None);
     }
 }

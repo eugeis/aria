@@ -40,7 +40,11 @@
             "frage den agenten {utterance}",
             "sag dem agenten {utterance}",
             "was hältst du von {utterance}",
-            "was meinst du zu {utterance}"
+            "was meinst du zu {utterance}",
+            "was sagt {utterance}",
+            "was steht in {utterance}",
+            "lies mir {utterance} vor",
+            "erkläre {utterance}"
           ]
         },
         {

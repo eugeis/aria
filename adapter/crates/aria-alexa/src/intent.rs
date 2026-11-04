@@ -102,7 +102,10 @@ impl IntentKind {
             "AMAZON.NextIntent" => IntentKind::Next,
             "AMAZON.PreviousIntent" => IntentKind::Previous,
             "AMAZON.FallbackIntent" => IntentKind::Fallback {
-                utterance: env.slot("utterance").map(str::to_string),
+                utterance: env
+                    .slot("utterance")
+                    .or(env.request.utterance.as_deref())
+                    .map(str::to_string),
             },
             // aria custom intents.
             "PlayMusicIntent" => IntentKind::PlayMusic {
@@ -272,6 +275,20 @@ mod tests {
             IntentKind::from_envelope(&env),
             IntentKind::Fallback {
                 utterance: Some("what is the capital of France".into())
+            }
+        );
+    }
+
+    #[test]
+    fn fallback_with_request_utterance() {
+        // The standard ASK shape: AMAZON.FallbackIntent carries the
+        // transcript in `request.utterance` (no slots of its own).
+        let json = r#"{"version":"1.0","session":null,"context":null,"request":{"type":"IntentRequest","requestId":"r","intent":{"name":"AMAZON.FallbackIntent"},"utterance":"spiel der herr ist unser friede"}}"#;
+        let env = envelope(json);
+        assert_eq!(
+            IntentKind::from_envelope(&env),
+            IntentKind::Fallback {
+                utterance: Some("spiel der herr ist unser friede".into())
             }
         );
     }

@@ -118,6 +118,11 @@ pub struct Request {
     pub dialog_state: Option<String>,
     #[serde(default)]
     pub intent: Option<Intent>,
+    /// The transcript of an IntentRequest — where ASK carries the
+    /// `AMAZON.FallbackIntent` text (the fallback intent has no slots of
+    /// its own; some envelopes also mirror it as a slot).
+    #[serde(default)]
+    pub utterance: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
