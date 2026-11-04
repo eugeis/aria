@@ -76,6 +76,172 @@ impl BrainAgent {
     }
 }
 
+/// Cheap bible-detection for the voice router: does the utterance look like
+/// a Bible question? (book names in DE + EN, "psalm", "passage", "verse",
+/// "kapitel", …). The adapter routes these to the capped `ask-bible` agent
+/// workflow (the LLM must choose the passage parameters); everything else
+/// goes to the chat-mode `ask` workflow. A false positive just gets a
+/// Bible-flavored "no match" answer — a false negative loses the verse text.
+pub fn bible_question(utterance: &str) -> bool {
+    // Umlaut-fold so the (umlaut-free) term list matches German speech
+    // ("römerbrief" -> "romerbrief").
+    let u = utterance
+        .to_lowercase()
+        .replace('ö', "o")
+        .replace('ä', "a")
+        .replace('ü', "u")
+        .replace('ß', "ss");
+    const TERMS: &[&str] = &[
+        // keywords
+        "bibel",
+        "bible",
+        "psalm",
+        "psalter",
+        "kapitel",
+        "verse",
+        "vers ",
+        "passage",
+        "abschnitt",
+        "heiliger geist",
+        "gott",
+        "christus",
+        "jesus",
+        "heiliger",
+        "bucht",
+        "testament",
+        // OT book names (DE)
+        "genesis",
+        "1. mose",
+        "2. mose",
+        "3. mose",
+        "4. mose",
+        "5. mose",
+        "exodus",
+        "levitikus",
+        "deuteronomium",
+        "josua",
+        "richter",
+        "ruth",
+        "1. samuel",
+        "2. samuel",
+        "1. könige",
+        "2. könige",
+        "1. chronik",
+        "2. chronik",
+        "esra",
+        "nehemia",
+        "esther",
+        "hiob",
+        "sprüche",
+        "sprueche",
+        "prediger",
+        "hohelied",
+        "jesaja",
+        "jeremia",
+        "klage",
+        "hesekiel",
+        "daniel",
+        "hosea",
+        "joel",
+        "amos",
+        "obadja",
+        "jonas",
+        "mika",
+        "nahum",
+        "habakuk",
+        "zefanja",
+        "haggai",
+        "sacharja",
+        "maleachi",
+        // NT book names (DE)
+        "matthäus",
+        "matthaeus",
+        "markus",
+        "lukas",
+        "johannes",
+        "apostelgeschichte",
+        "romer",
+        "1. korinther",
+        "2. korinther",
+        "galater",
+        "epheser",
+        "philipper",
+        "kolosser",
+        "1. thessalonicher",
+        "2. thessalonicher",
+        "1. timotheus",
+        "2. timotheus",
+        "titus",
+        "philemon",
+        "hebräer",
+        "hebraeer",
+        "jakobus",
+        "1. petrus",
+        "2. petrus",
+        "1. johannes",
+        "2. johannes",
+        "3. johannes",
+        "juda",
+        "offenbarung",
+        // EN book names (the ones that differ from the DE)
+        "genesis",
+        "exodus",
+        "leviticus",
+        "deuteronomy",
+        "joshua",
+        "judges",
+        "ruth",
+        "samaritan",
+        "samuel",
+        "kings",
+        "chronicles",
+        "ezra",
+        "nehemiah",
+        "esther",
+        "job",
+        "proverbs",
+        "ecclesiastes",
+        "song of songs",
+        "isaiah",
+        "jeremiah",
+        "lamentations",
+        "ezekiel",
+        "daniel",
+        "hosea",
+        "joel",
+        "amos",
+        "obadiah",
+        "jonah",
+        "micah",
+        "nahum",
+        "habakkuk",
+        "zephaniah",
+        "haggai",
+        "zechariah",
+        "malachi",
+        "mattthew",
+        "mark",
+        "luke",
+        "john",
+        "acts",
+        "romans",
+        "corinthians",
+        "galatians",
+        "ephesians",
+        "philippians",
+        "colossians",
+        "thessalonians",
+        "timothy",
+        "titus",
+        "philemon",
+        "hebrews",
+        "james",
+        "peter",
+        "revelation",
+    ];
+    TERMS.iter().any(|t| u.contains(t))
+}
+
 impl AgentBackend for BrainAgent {
     fn ask(
         &self,
@@ -85,12 +251,21 @@ impl AgentBackend for BrainAgent {
     ) -> BoxFuture<'_, Result<TurnOutcome, AgentError>> {
         let device = device.to_string();
         let text = text.to_string();
+        // Mode routing: Bible questions -> the capped agent workflow (the
+        // model chooses the passage params); everything else -> chat mode
+        // (deterministic searches + one LLM call, ~3 s).
+        let workflow = if bible_question(&text) {
+            "ask-bible"
+        } else {
+            "ask"
+        };
         let http = self.http.clone();
         let base = self.base.clone();
         let token = self.token.clone();
+        let workflow = workflow.to_string();
         Box::pin(async move {
             let mut req = http
-                .post(format!("{base}/api/workflows/ask/run"))
+                .post(format!("{base}/api/workflows/{workflow}/run"))
                 .json(&serde_json::json!({ "utterance": text, "device": device }));
             if !token.is_empty() {
                 req = req.bearer_auth(token);
@@ -213,5 +388,45 @@ impl AgentBackend for MockAgent {
                 reason: "mock brain does not resolve".into(),
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bible_terms_route_to_bible() {
+        for u in [
+            "was sagt psalm 23",
+            "lies mir aus 1. Mose Kapitel 1 vor",
+            "read john 3 verse 16",
+            "was steht im Römerbrief",
+            "erzähl von der Offenbarung",
+            "Psalm 23, Vers 1 bitte",
+            "was heißt in Jesaja 40",
+            "the book of Proverbs chapter 3",
+        ] {
+            assert!(bible_question(u), "should be a bible question: {u}");
+        }
+    }
+
+    #[test]
+    fn non_bible_terms_route_to_ask() {
+        for u in [
+            "welche alben habe ich",
+            "spiel bohemian rhapsody ab",
+            "was sagte die predigt über gnade",
+            "welche predigten habe ich",
+            "mach das lautstärker",
+        ] {
+            assert!(!bible_question(u), "should NOT be a bible question: {u}");
+        }
+    }
+
+    #[test]
+    fn detection_is_case_and_space_insensitive() {
+        assert!(bible_question("PSALM 23"));
+        assert!(bible_question("Was sagt Psalm 23?"));
     }
 }

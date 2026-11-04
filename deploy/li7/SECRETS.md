@@ -50,42 +50,23 @@ sudo mkdir -p /var/lib/aria-data /var/lib/aria-lancedb
   playable. Add a collection by editing the baked config's
   `[collections]` items (→ rebuild the `mosaic/aria-ask` image).
 
-## The vLLM bridge (why `gpu.datalab.siemens.com` resolves the way it does)
+## No vLLM access from li7 (2026-11)
 
-PRODUCTION uses OpenRouter (the `chat` registry entry, public API — no
-bridge needed). The bridge below exists for the `chat-vllm` registry
-entry: development + data preparation against the in-house vLLM box. It
-points at `https://gpu.datalab.siemens.com:8902/vllm/v1` — a reverse SSH tunnel that
-listens on **127.0.0.1:8902 of the li7 host** (the domain maps to
-`127.0.0.1` in the host's `/etc/hosts`; sshd binds the listener to loopback
-by default). Pods cannot see the host's `/etc/hosts`, so two li7-local bits
-make it work (both re-created automatically if lost):
+The original voice brain was the in-house vLLM box (datalab GPU) behind a
+loopback `ssh -R` tunnel on li7. **li7 no longer has access to it (and will
+not again)**, so:
 
-* `vllm-pod-bridge.service` (systemd, `Restart=always`): a socat that
-  forwards `192.168.11.63:8902` (the node IP) → `127.0.0.1:8902`.
-  ```
-  sudo tee /etc/systemd/system/vllm-pod-bridge.service <<'EOF'
-  [Unit]
-  Description=Bridge the loopback vLLM SSH tunnel (127.0.0.1:8902) to the node IP for k8s pods
-  After=network.target
-  [Service]
-  ExecStart=/usr/bin/socat TCP-LISTEN:8902,bind=192.168.11.63,reuseaddr,fork TCP:127.0.0.1:8902
-  Restart=always
-  RestartSec=2
-  [Install]
-  WantedBy=multi-user.target
-  EOF
-  sudo systemctl daemon-reload && sudo systemctl enable --now vllm-pod-bridge.service
-  ```
-* The chart's pod spec carries a `hostAliases` entry aliasing
-  `gpu.datalab.siemens.com` → `192.168.11.63` (injected by
-  `inject.rs`, so a re-render never loses it). The TLS chain
-  validates strictly (the vLLM endpoint presents a cert for the domain).
+* the app runs its LLM entirely on **OpenRouter** (the `chat` registry
+  entry; the key is `/home/ee/.ssh/openrouter` below);
+* the `vllm-pod-bridge.service` socat and the chart `hostAliases` entry
+  that made the tunnel pod-visible are **removed** (the unit was disabled
+  and deleted on li7 on 2026-11-04);
+* if a self-hosted model box appears later (your own hardware or a new
+  server), it re-enters as a normal `model_registry` entry with its own
+  base URL — no bridge machinery needed as long as li7 can reach it
+  directly.
 
-The tunnel session itself is the fragile part: it is an `ssh -R` from the
-GPU-side machine, not systemd-managed. If LLM answers stop working, check
-`sudo ss -tlnp | grep 8902` on li7 for the sshd listener.
-
+## Memory budget (do not raise requests casually)
 ## Memory budget (do not raise requests casually)
 
 li7 has **61.5 Gi allocatable** and co-tenants (bible ~51 Gi, pages ~8 Gi,

@@ -67,9 +67,6 @@ app:
     # soft (typed error, no network hang) — the adapter falls back to its
     # deterministic resolver.
     MOAIC_CHAT_API_KEY: { secret: true }
-    # The in-house vLLM bearer (dev/data-prep surface only — see the
-    # chat-vllm registry entry). Missing = that surface fails soft.
-    MOAIC_VLLM_API_KEY: { secret: true }
     # The deterministic 256-dim local embedder (pure Rust, no key, no
     # network) — the hybrid vector leg for the small media/sermons corpora.
     MOAIC_EMBED_LOCAL: "1"
@@ -114,31 +111,25 @@ app:
         # something else on the node.
         memory: "512Mi"
 
-# ADR 0017: the voice brain's LLM — house policy: ALL mosaic apps run their
+# ADR 0017: the brain's LLM — house policy: ALL mosaic apps run their
 # operations on OpenRouter (MOAIC_CHAT_API_KEY carries the key; on li7 the
-# runner file /home/ee/.ssh/openrouter, shared with the pages app). The
-# in-house vLLM box (the datalab GPU box) stays for development + data
-# preparation only — declared, but wired into nothing.
+# runner file /home/ee/.ssh/openrouter, shared with the pages app).
+# deepseek/deepseek-v4-flash — the best preis/leistung in the tool-calling
+# tier (~$0.09/$0.18 per Mtok; a voice turn costs ~half a cent).
+#
+# NOTE: li7 has NO access to the datalab vLLM box (2026-11) — that was the
+# original voice brain and is gone from this app. If a self-hosted model
+# box appears later, it re-enters as a normal registry entry.
 #
 # The built-in `chat` role is overridden, so the auto-derived assistant /
 # A2A / agents / aide surfaces AND the workflow llm/agent nodes all pick it
-# up. deepseek/deepseek-v4-flash is the SAME model the vLLM box serves, so
-# dev and production behave alike.
+# up.
 model_registry:
   - name: chat
     about: "OpenRouter chat (deepseek/deepseek-v4-flash) — the voice brain (production)."
     provider: CHAT
     model: deepseek/deepseek-v4-flash
     base_url: "https://openrouter.ai/api/v1"
-    chat: true
-  - name: chat-vllm
-    # Own provider family (VLLM, not CHAT): the box enforces its own bearer
-    # on /chat/completions, so it needs its own key env (MOAIC_VLLM_API_KEY)
-    # — the CHAT family's key is the OpenRouter key and gets a 401 there.
-    about: "In-house vLLM (deepseek-v4-flash on the datalab GPU box) — development + data preparation; NOT wired into any workflow (voice runs on OpenRouter within the 8-s budget). Key: MOAIC_VLLM_API_KEY (the box's bearer — re-issue it on the GPU box when needed). On li7 it is reached through the loopback tunnel (vllm-pod-bridge + hostAliases — deploy/li7/SECRETS.md)."
-    provider: VLLM
-    model: deepseek-v4-flash
-    base_url: "https://gpu.datalab.siemens.com:8902/vllm/v1"
     chat: true
 
 persistence:
@@ -293,6 +284,17 @@ parts:
               body: '{"utterance": "what is playing on my heart right now?", "device": "e2e-echo"}'
               assert_status: 200
               assert_contains: "e2e-answer"
+            # — the brain: ask-bible (agent mode; the MCP tool is
+            #   unconfigured in e2e, so the agent's ONE tool round returns a
+            #   typed error and the capped agent still ends with the
+            #   cassette's final answer) —
+            - name: ask_bible_workflow_answers
+              method: POST
+              path: "/api/workflows/ask-bible/run"
+              service_account: adapter
+              body: '{"utterance": "was sagt psalm 23", "device": "e2e-echo"}'
+              assert_status: 200
+              assert_contains: "e2e-bible-answer"
             # — the brain: resolve-play (search + the deciding LLM) —
             - name: resolve_play_picks_the_track
               method: POST
@@ -324,8 +326,14 @@ workflows:
   # FallbackIntent) and speaks the answer. The agent's tools ground it: the
   # two local KBs (media metadata, sermon scripts) + the bible app's MCP
   # (passages, search). Short answers — they are heard, not read.
+  # Chat mode for the voice: two deterministic searches (media metadata +
+  # sermon scripts, both sub-second over the local hybrid index) merged by a
+  # mapper node, then ONE LLM call. No tool loop — the 8 s endpoint budget is
+  # guaranteed (measured: ~3 s total on OpenRouter v4-flash), and the model
+  # can no longer burn rounds re-querying the catalog (that is what produced
+  # the 13 s empty answer).
   - name: ask
-    about: "One voice turn from the Alexa adapter: the LLM answers for the voice (grounded in the media + sermons collections and the Bible app's MCP tools). The adapter speaks the result as SSML. OpenRouter (chat): Alexa's endpoint must answer in 8 s — measured, v4-flash does the two-round tool pattern in ~3 s from li7, so the remote LLM fits the budget; the agent is capped at 3 calls + one-tool-call discipline to stay there (a runaway search loop is what produces empty answers)."
+    about: "One voice turn (chat mode): RAG over the media + sermons collections, one spoken answer. The adapter routes every non-Bible AskIntent here."
     nodes:
       - type: start
         id: start_1
@@ -339,33 +347,120 @@ workflows:
               ty: String
               optional: true
               about: "The Echo device id (context only — memory is per-conversation, not per-device, in v1)."
-      - type: agent
-        id: brain
+      - type: search
+        id: find_media
         props:
-          title: Answer for the voice
-          goal: "The user just said: {{utterance}}"
-          system: |
-            You are Aria, the owner's personal voice assistant, heard through an
-            Amazon Echo. Your answer is SPOKEN by a text-to-speech engine: one to
-            three short, conversational sentences — no markdown, no lists, no
-            code, no citation numbers. Use your tools when they help: search the
-            owner's own media collections (tracks, albums, artists, radio,
-            audiobooks, sermon recordings), search his sermon and seminar
-            scripts, and read Bible passages or search the whole Bible through
-            the bible tools (when you read a verse, speak its text plainly and
-            name the reference at the end). If a tool does not answer, say so in
-            one sentence instead of guessing. Never invent titles, verses,
-            authors or facts. Be efficient: at most ONE tool call in total,
-            then answer directly with what you have — the answer is spoken
-            within 8 seconds.
+          title: Search the media metadata
+          collection: media
+          query: "{{utterance}}"
+          top_k: 8
+      - type: search
+        id: find_sermons
+        props:
+          title: Search the sermon scripts
+          collection: sermons
+          query: "{{utterance}}"
+          top_k: 4
+      - type: mapper
+        id: merge
+        code: |
+          // The flat payload is first-writer-wins, so the two searches'
+          // `results` collide — this node reads the per-node outputs
+          // (globals) directly and builds one context string.
+          const fmt = (r) => {
+            const m = r.meta || {};
+            const bits = [];
+            if (m.kind_media) bits.push(m.kind_media);
+            if (m.entry) bits.push(m.entry);
+            if (m.artist) bits.push(m.artist);
+            if (m.album) bits.push(m.album);
+            if (m.book) bits.push("book: " + m.book);
+            if (m.slug) bits.push(m.slug);
+            return bits.join(", ");
+          };
+          const media = (find_media.results || []).map(fmt).join("; ");
+          const sermons = (find_sermons.results || [])
+            .map((r) => r.text || r.id || "").join(" | ");
+          return {
+            context:
+              (media ? "MEDIA CATALOG (retrieved):\n" + media : "") +
+              (sermons ? "\n\nSERMON SCRIPTS (retrieved text):\n" + sermons : "") ||
+              "(nothing retrieved — the collections may be empty)",
+          };
+      - type: llm
+        id: speak
+        props:
+          title: Speak the answer
           model:
             model: chat
-          max_turns: 3
+        prompt:
+          - role: system
+            content: |
+              You are Aria, the owner's personal voice assistant, heard through an
+              Amazon Echo. Your answer is SPOKEN: one to three short, conversational
+              sentences — no markdown, no lists, no code, no citation numbers.
+              Answer from the retrieved context below. If the context does not
+              answer the question, say so in one sentence instead of guessing.
+              Never invent titles, albums, authors or facts.
+          - role: user
+            content: "The owner just said: {{utterance}}\n\nContext:\n{{context}}"
+      - type: end
+        id: end_1
+        props:
+          title: End
+          outputs:
+            - name: answer
+              ty: String
+              default: "speak.output"
+    edges:
+      - { from: start_1, to: find_media }
+      - { from: find_media, to: find_sermons }
+      - { from: find_sermons, to: merge }
+      - { from: merge, to: speak }
+      - { from: speak, to: end_1 }
+
+  # Agent mode for the voice — reserved for Bible questions, where the LLM
+  # must CHOOSE the tool arguments (which book/chapter/verses/translation).
+  # Capped at 2 LLM calls (one tool round + the answer): ~6 s worst case,
+  # inside the 8 s endpoint budget. The adapter routes here when the
+  # utterance looks biblical (book names, "psalm", "passage", ...).
+  - name: ask-bible
+    about: "One voice turn (agent mode): the LLM reads a passage through the Bible app's MCP (bible_passage) or searches it (bible_search) and speaks the verse. Capped at one tool round."
+    nodes:
+      - type: start
+        id: start_1
+        props:
+          title: Start
+          variables:
+            - name: utterance
+              ty: String
+              about: "The user's spoken Bible question."
+            - name: device
+              ty: String
+              optional: true
+              about: "The Echo device id (context only)."
+      - type: agent
+        id: bible
+        props:
+          title: Read the passage
+          goal: "The user just said: {{utterance}}"
+          system: |
+            You are Aria, answering a Bible question on an Amazon Echo. The
+            owner is German-speaking: default translation german-schlachter2000
+            (alternatives: english-kj, russian-synodal). Use ONE tool call:
+            bible_passage reads a passage (translation, book, chapter,
+            verse_from, verse_to — book is a JSON STRING, "19" for Psalms,
+            never a bare number), bible_search searches the whole Bible when
+            the question is thematic. Then speak the verse text plainly in
+            one to three short sentences and name the reference at the end
+            (e.g. "Psalm 23, Vers 1"). No markdown, no lists, no citation
+            numbers. If the tool does not answer, say so in one sentence.
+          model:
+            model: chat
+          max_turns: 2
           tools: |
             [
-              {"name": "search_media", "description": "Search the owner's own media collections (tracks, albums, artists, radio presets, audiobooks with chapters, sermon recordings). Returns metadata records (kind_media, entry, artist, album, book, file, duration_ms, slug).", "input": {"type": "object", "properties": {"query": {"type": "string", "description": "What to look for."}}, "required": ["query"]}, "knowledge": {"collection": "media", "top_k": 8}},
-              {"name": "search_sermons", "description": "Search the TEXT of the owner's sermon and seminar scripts (themes, quotes, content).", "input": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}, "knowledge": {"collection": "sermons", "top_k": 4}},
-              {"name": "bible_passage", "description": "Read an ordered passage from the Bible app (500+ translations incl. german-schlachter2000, russian-synodal, english-kj; commentaries ride the same surface). Returns the verse texts in order.", "input": {"type": "object", "properties": {"translation": {"type": "string", "description": "e.g. english-kj, german-schlachter2000, russian-synodal."}, "book": {"type": "string", "description": "The book number AS A JSON STRING (\"1\"=Genesis .. \"66\"=Revelation) or an OSIS code (\"Exod\", \"Psal\", \"John\"). Never send a bare number — the Bible app rejects integers."}, "chapter": {"type": "number"}, "verse_from": {"type": "number"}, "verse_to": {"type": "number"}}, "required": ["translation", "book", "chapter"]}, "mcp": {"server": "bible", "tool": "scripture_passage"}},
+              {"name": "bible_passage", "description": "Read an ordered passage from the Bible app (500+ translations incl. german-schlachter2000, russian-synodal, english-kj; commentaries ride the same surface). Returns the verse texts in order.", "input": {"type": "object", "properties": {"translation": {"type": "string", "description": "e.g. english-kj, german-schlachter2000, russian-synodal."}, "book": {"type": "string", "description": "The 1-based book number AS A JSON STRING (\"1\"=Genesis .. \"66\"=Revelation) or an OSIS code (\"Exod\", \"Psal\", \"John\"). Never send a bare number — the Bible app rejects integers."}, "chapter": {"type": "number"}, "verse_from": {"type": "number"}, "verse_to": {"type": "number"}}, "required": ["translation", "book", "chapter"]}, "mcp": {"server": "bible", "tool": "scripture_passage"}},
               {"name": "bible_search", "description": "Full-text search over the Bible app's translations and commentaries (meta-filter by translation/language/book).", "input": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}, "mcp": {"server": "bible", "tool": "search_knowledge"}}
             ]
       - type: end
@@ -375,17 +470,11 @@ workflows:
           outputs:
             - name: answer
               ty: String
-              default: "brain.output"
+              default: "bible.output"
     edges:
-      - { from: start_1, to: brain }
-      - { from: brain, to: end_1 }
+      - { from: start_1, to: bible }
+      - { from: bible, to: end_1 }
 
-  # "Play X" resolution for the adapter's FALLBACK path (the adapter tries
-  # its own deterministic resolver first — radio preset, album / artist /
-  # genre exact, fuzzy — and only lands here when that misses or the query
-  # is natural-language). One search over the metadata KB + one structured
-  # LLM decision. The adapter plays whatever comes back by `slug`; on
-  # `action: none` it escalates to the `ask` workflow (the answer is spoken).
   - name: resolve-play
     about: "Resolves a play request against the media collection: a search over the scan-generated metadata + one structured LLM decision. Output: {action, slug, reason} — the slug is a media record slug (trk:/alb:/art:/rad:/abk:/serm:), action `none` = nothing matched. OpenRouter (chat) — one LLM call after the search, well inside the 8-s voice budget."
     nodes:

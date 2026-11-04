@@ -18,8 +18,6 @@
 //!   * the ingress path split (/alexa, /stream, /art -> ask; the rest -> api)
 //!   * a no-surge rollout strategy (li7 is memory-tight — an old aria pod and
 //!     its replacement may never be scheduled at the same time)
-//!   * the vLLM hostAlias (the dev/data-prep model URL is a loopback SSH
-//!     tunnel on the li7 host; see SECRETS.md)
 //!
 //! Everything is baked into the template so ONE `helm upgrade` produces the
 //! final pod spec — a post-helm `kubectl patch` would mutate the template a
@@ -181,24 +179,6 @@ const STRATEGY_NEW: &str = r"          strategy:
               maxUnavailable: 1
 ";
 
-/// The vLLM endpoint is only reachable through a loopback SSH tunnel on the
-/// li7 host (the domain maps to 127.0.0.1 in the host /etc/hosts; the tunnel
-/// is an `ssh -R` session, loopback-bound by the sshd GatewayPorts default).
-/// Pods resolve the domain via cluster DNS instead — so alias it to the node
-/// IP, and let vllm-pod-bridge.service (a socat on the node) forward
-/// node-IP:8902 -> 127.0.0.1:8902. See deploy/li7/SECRETS.md.
-const HOSTALIASES_BLOCK: &str = r"      # li7 (injected by inject.rs): the vLLM model registry URL
-      # (gpu.datalab.siemens.com:8902) is a loopback SSH tunnel on the li7
-      # host — pods cannot see the host's /etc/hosts entry, so alias the
-      # domain to the node IP (socat bridge: vllm-pod-bridge.service).
-      hostAliases:
-        - ip: 192.168.11.63
-          hostnames:
-            - gpu.datalab.siemens.com
-";
-
-const VOLUMES_ANCHOR: &str = "\n      volumes:\n";
-
 const INGRESS_OLD: &str = r#"        paths:
           - path: /
             pathType: Prefix
@@ -343,16 +323,8 @@ fn main() {
         }
     }
 
-    if !original.contains("hostAliases") {
-        if replace_once(&mut text, VOLUMES_ANCHOR, &format!("\n{HOSTALIASES_BLOCK}      volumes:\n")) {
-            println!("injected the vLLM hostAlias into {dep:?}");
-        } else {
-            println!("NOTE: pod-spec volumes anchor not found in {dep:?} (chart changed?)");
-        }
-    }
-
     // Write the deployment back (the sidecar + volumes + strategy +
-    // hostAliases steps all operated on the in-memory copy).
+    // steps all operated on the in-memory copy).
     fs::write(&dep, &text).unwrap_or_else(|e| {
         eprintln!("ERROR: cannot write {dep:?}: {e}");
         exit(1);

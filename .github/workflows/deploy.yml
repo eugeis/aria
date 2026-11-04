@@ -9,7 +9,7 @@
 #     3. injects ALL the li7-only glue into the rendered helm chart — the
 #        aria-ask sidecar, the hostPath mounts (/media, /data, /vector),
 #        the service ports, the ingress path split, the no-surge rollout
-#        strategy and the vLLM hostAlias. ONE helm upgrade is final: no
+#        strategy. ONE helm upgrade is final: no
 #        post-helm kubectl patch (a second template mutation spawns a
 #        second ReplicaSet and deadlocks the rollout on this memory-tight
 #        node — the pod and its replacement may never both be scheduled).
@@ -23,7 +23,6 @@
 #   /var/lib/aria-lancedb   ext4 host dir (the LanceDB vector store)
 #   /home/ee/audio          the audio collections (musik / predigt / bible / books / ...)
 #   the secret files under /home/ee/.ssh/ (aria-*)
-#   vllm-pod-bridge.service running (the vLLM tunnel is loopback-only on the host)
 #   a runner registered in THIS repo (label "li7") — the li7 machine already
 #   runs one each for eugeis/mosaic, -bible and -mosaic-pages; register a
 #   fourth for eugeis/aria (same machine; docker/k3s/helm are present)
@@ -200,8 +199,8 @@ jobs:
           fi
           # The chat base URL is OpenRouter (baked into the tessera model
           # registry; the key rides MOAIC_CHAT_API_KEY). The chat_base_url
-          # input overrides it for dev/data-prep runs against the in-house
-          # vLLM tunnel (hostAliases + vllm-pod-bridge — SECRETS.md).
+          # input overrides it (e.g. for a future self-hosted model box —
+          # SECRETS.md).
           helm upgrade --install "$RELEASE" "$CHART" \
             --namespace "$NAMESPACE" \
             --create-namespace \
