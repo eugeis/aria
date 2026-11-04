@@ -38,7 +38,7 @@ on:
         required: true
         default: main
       chat_base_url:
-        description: Override the brain's LLM base URL (empty = the li7 tunnel value below; the host paths are fixed in deploy/li7/inject-sidecars.py — see SECRETS.md)
+        description: Override the brain's LLM base URL (empty = OpenRouter, baked into the tessera model registry; the vLLM box is dev/data-prep only — SECRETS.md)
         required: false
         default: ""
 
@@ -141,13 +141,16 @@ jobs:
           # files on the runner (see deploy/li7/SECRETS.md) — never from the
           # repo. A missing file warns (the surface fails soft), never fails
           # the deploy.
-          declare -A FILES=(
-            [MOAIC_JWT_SECRET]=/home/ee/.ssh/aria-jwt-secret
-            [MOAIC_ADMIN_PASSWORD]=/home/ee/.ssh/aria-admin-password
-            [MOAIC_ADAPTER_TOKEN]=/home/ee/.ssh/aria-adapter-token
-            [MOAIC_CHAT_API_KEY]=/home/ee/.ssh/aria-chat-key
-            [MOAIC_MCP_BIBLE_AUTH]=/home/ee/.ssh/bible-reader-token
-          )
+           # MOAIC_CHAT_API_KEY is the OpenRouter key (house policy: all
+           # mosaic apps run operations on OpenRouter) — the SAME file the
+           # pages app uses.
+           declare -A FILES=(
+             [MOAIC_JWT_SECRET]=/home/ee/.ssh/aria-jwt-secret
+             [MOAIC_ADMIN_PASSWORD]=/home/ee/.ssh/aria-admin-password
+             [MOAIC_ADAPTER_TOKEN]=/home/ee/.ssh/aria-adapter-token
+             [MOAIC_CHAT_API_KEY]=/home/ee/.ssh/openrouter
+             [MOAIC_MCP_BIBLE_AUTH]=/home/ee/.ssh/bible-reader-token
+           )
           for VAR in "${!FILES[@]}"; do
             f="${FILES[$VAR]}"
             if [ -f "$f" ]; then
@@ -191,8 +194,10 @@ jobs:
           if [ -n "$CHAT_BASE_URL" ]; then
             chat_args+=(--set "env.MOAIC_CHAT_BASE_URL=$CHAT_BASE_URL")
           fi
-          # On li7 the chat base URL is the tunnel (hostAliases + the
-          # vllm-pod-bridge socat make it pod-visible — SECRETS.md).
+          # The chat base URL is OpenRouter (baked into the tessera model
+          # registry; the key rides MOAIC_CHAT_API_KEY). The chat_base_url
+          # input overrides it for dev/data-prep runs against the in-house
+          # vLLM tunnel (hostAliases + vllm-pod-bridge — SECRETS.md).
           helm upgrade --install "$RELEASE" "$CHART" \
             --namespace "$NAMESPACE" \
             --create-namespace \
@@ -203,7 +208,6 @@ jobs:
             --set "env.MOAIC_DB_PATH=/data/app.db" \
             --set "env.MOSAIC_VECTOR_BACKEND=lancedb" \
             --set "env.MOSAIC_VECTOR_URL=/vector" \
-            --set "env.MOAIC_CHAT_BASE_URL=https://gpu.datalab.siemens.com:8902/vllm/v1" \
             "${chat_args[@]}"
           # NOTE: no post-helm kubectl patch. The injector (step above)
           # baked the hostPath volumes/mounts into the chart template, so

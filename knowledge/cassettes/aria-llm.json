@@ -1,6 +1,6 @@
 {
   "calls": {
-    "4310d10fb060d29f": {
+    "eb0d0200e512f27c": {
       "request": {
         "messages": [
           {
@@ -12,7 +12,7 @@
             "role": "user"
           }
         ],
-        "model": "deepseek-v4-flash",
+        "model": "deepseek/deepseek-v4-flash",
         "response_format": {
           "json_schema": {
             "name": "output",
@@ -55,7 +55,7 @@
         }
       }
     },
-    "7bc1508eeff0ed6b": {
+    "55aa9c6247673954": {
       "request": {
         "messages": [
           {
@@ -67,7 +67,7 @@
             "role": "user"
           }
         ],
-        "model": "deepseek-v4-flash",
+        "model": "deepseek/deepseek-v4-flash",
         "tools": [
           {
             "function": {
@@ -176,7 +176,7 @@
         }
       }
     },
-    "c3afcf056e79391c": {
+    "f47208314a53fde1": {
       "request": {
         "messages": [
           {
@@ -188,7 +188,7 @@
             "role": "user"
           }
         ],
-        "model": "deepseek-v4-flash",
+        "model": "deepseek/deepseek-v4-flash",
         "response_format": {
           "json_schema": {
             "name": "output",

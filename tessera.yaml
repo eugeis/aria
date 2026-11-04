@@ -61,9 +61,11 @@ app:
     # The ASK adapter sidecar's credential (editor: runs the ask /
     # resolve-play workflows + POSTs /api/ops/reindex after a scan).
     MOAIC_ADAPTER_TOKEN: { secret: true }
-    # The voice brain's LLM (the in-house vLLM, same model family as the
-    # bible app). Without it the workflows fail soft (typed error, no
-    # network hang) — the adapter falls back to its deterministic resolver.
+    # The voice brain's LLM key — OpenRouter (house policy: ALL mosaic apps
+    # run their operations on OpenRouter; the in-house vLLM box is for
+    # development + data preparation only). Without it the workflows fail
+    # soft (typed error, no network hang) — the adapter falls back to its
+    # deterministic resolver.
     MOAIC_CHAT_API_KEY: { secret: true }
     # The deterministic 256-dim local embedder (pure Rust, no key, no
     # network) — the hybrid vector leg for the small media/sermons corpora.
@@ -109,17 +111,28 @@ app:
         # something else on the node.
         memory: "512Mi"
 
-# ADR 0017: the voice brain's LLM — deepseek-v4-flash on the in-house vLLM
-# (the datalab GPU box; MOAIC_CHAT_API_KEY carries the bearer, as on the
-# bible app). The built-in `chat` role is overridden, so the auto-derived
-# assistant / A2A / agents / aide surfaces AND the workflow llm/agent nodes
-# all pick it up.
+# ADR 0017: the voice brain's LLM — house policy: ALL mosaic apps run their
+# operations on OpenRouter (MOAIC_CHAT_API_KEY carries the key; on li7 the
+# runner file /home/ee/.ssh/openrouter, shared with the pages app). The
+# in-house vLLM box (the datalab GPU box) stays for development + data
+# preparation only — declared, but wired into nothing.
+#
+# The built-in `chat` role is overridden, so the auto-derived assistant /
+# A2A / agents / aide surfaces AND the workflow llm/agent nodes all pick it
+# up. deepseek/deepseek-v4-flash is the SAME model the vLLM box serves, so
+# dev and production behave alike.
 model_registry:
   - name: chat
-    about: "In-house vLLM chat (deepseek-v4-flash) — the voice brain."
+    about: "OpenRouter chat (deepseek/deepseek-v4-flash) — the voice brain (production)."
+    provider: CHAT
+    model: deepseek/deepseek-v4-flash
+    base_url: "https://openrouter.ai/api/v1"
+    chat: true
+  - name: chat-vllm
+    about: "In-house vLLM (deepseek-v4-flash) — development + data preparation only; NOT wired into any workflow. On li7 it is reached through the loopback tunnel (vllm-pod-bridge + hostAliases — deploy/li7/SECRETS.md)."
     provider: CHAT
     model: deepseek-v4-flash
-    base_url: "https://gpu.datalab.siemens.com/vllm/v1"
+    base_url: "https://gpu.datalab.siemens.com:8902/vllm/v1"
     chat: true
 
 persistence:

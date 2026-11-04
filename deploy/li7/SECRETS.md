@@ -11,7 +11,7 @@ the workflow strips it).
 | `/home/ee/.ssh/aria-jwt-secret` | `MOAIC_JWT_SECRET` → `moaic-jwt-secret` | JWT signing for the brain's identity |
 | `/home/ee/.ssh/aria-admin-password` | `MOAIC_ADMIN_PASSWORD` → `moaic-admin-password` | the `admin` user (ops, web chat lens) |
 | `/home/ee/.ssh/aria-adapter-token` | `MOAIC_ADAPTER_TOKEN` → `moaic-adapter-token` | the `adapter` service account (the ASK sidecar's credential — it rides on the same secret as `ARIA_BRAIN_TOKEN` in the sidecar) |
-| `/home/ee/.ssh/aria-chat-key` | `MOAIC_CHAT_API_KEY` → `moaic-chat-api-key` | the vLLM bearer for the voice brain (same value family as the bible app's chat key) |
+| `/home/ee/.ssh/openrouter` | `MOAIC_CHAT_API_KEY` → `moaic-chat-api-key` | the OpenRouter key for the voice brain — house policy: ALL mosaic apps run their operations on OpenRouter (the in-house vLLM box is dev/data-prep only). This is the SAME file the pages app uses; the deploy workflow points at it directly. |
 | `/home/ee/.ssh/bible-reader-token` | `MOAIC_MCP_BIBLE_AUTH` → `moaic-mcp-bible-auth` | the bible app's `reader` service-account token — the bearer the brain's MCP client presents to `https://bible.eisler-systems.de/mcp` (share it from bible's `MOAIC_READER_TOKEN` secret) |
 
 Missing files do not fail the deploy — the matching surface fails soft
@@ -54,8 +54,10 @@ sudo mkdir -p /var/lib/aria-data /var/lib/aria-lancedb /var/lib/aria-media
 
 ## The vLLM bridge (why `gpu.datalab.siemens.com` resolves the way it does)
 
-The voice brain's model registry points at
-`https://gpu.datalab.siemens.com:8902/vllm/v1` — a reverse SSH tunnel that
+PRODUCTION uses OpenRouter (the `chat` registry entry, public API — no
+bridge needed). The bridge below exists for the `chat-vllm` registry
+entry: development + data preparation against the in-house vLLM box. It
+points at `https://gpu.datalab.siemens.com:8902/vllm/v1` — a reverse SSH tunnel that
 listens on **127.0.0.1:8902 of the li7 host** (the domain maps to
 `127.0.0.1` in the host's `/etc/hosts`; sshd binds the listener to loopback
 by default). Pods cannot see the host's `/etc/hosts`, so two li7-local bits
