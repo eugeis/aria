@@ -102,3 +102,44 @@ Real content gets in two ways:
 2. **Sermon scripts:** sync them to `/var/lib/aria-data/knowledge/sermons/`
    (markdown, the eugeis/sermons `content/` flattened) + restart the pod —
    or POST `/api/ops/reindex` with the `adapter` service token.
+
+## Derived-data cache (embeddings, indexes) and resetting it
+
+The generated apps (bible, aria, everything) share the same caching seam
+(ADR 0019): the knowledge boot keeps a **delta manifest + persist files per
+collection** on the data volume. A reindex of UNCHANGED files reuses the
+stored chunks + embeddings — nothing is recomputed, no credits spent.
+(A changed file is re-chunked and re-embedded as a whole; there is no
+chunk-level cache.) Since the embedder here is the deterministic local
+256-dim one (`MOAIC_EMBED_LOCAL=1`), embeddings cost nothing at all — the
+only OpenRouter spend is LLM calls (voice turns, assistant turns).
+
+Reset, when you want a clean re-derive (e.g. after changing the embedder
+or suspecting a corrupt index). Everything lives on host dirs, so no
+kubectl is needed to wipe — just delete + restart the pod:
+
+```
+# aria: the WHOLE knowledge state (both collections)
+sudo rm -rf /var/lib/aria-data/knowledge/.index \
+            /var/lib/aria-data/knowledge/.runtime \
+            /var/lib/aria-lancedb/*
+kubectl -n aria rollout restart deployment/aria
+
+# aria: ONE collection only (e.g. sermons)
+sudo rm -f  /var/lib/aria-data/knowledge/.index/sermons.json
+sudo rm -rf /var/lib/aria-lancedb/*sermons*
+kubectl -n aria rollout restart deployment/aria
+
+# bible: same shape, its own dirs (host dir /home/ee/bible-data; the
+# LanceDB store lives INSIDE it at lancedb/, not in a separate dir)
+sudo rm -rf /home/ee/bible-data/knowledge/.index \
+            /home/ee/bible-data/knowledge/.runtime \
+            /home/ee/bible-data/lancedb/*
+kubectl -n bible rollout restart deployment/bible
+```
+
+The SOURCE files (`knowledge/media/media.jsonl.gz`, `knowledge/sermons/`,
+the corpus) are NOT touched — only the derived state. The adapter's
+published catalog and the bible's committed corpus survive; the brain
+re-derives chunks + vectors on the next boot (bible: minutes for 1.6M
+verses with the local embedder; aria: seconds).
