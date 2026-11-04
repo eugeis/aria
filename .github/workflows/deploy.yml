@@ -21,7 +21,7 @@
 # Prereqs on li7 (see deploy/li7/SECRETS.md):
 #   /var/lib/aria-data      ext4 host dir (brain corpus + persist seam + sqlite)
 #   /var/lib/aria-lancedb   ext4 host dir (the LanceDB vector store)
-#   /var/lib/aria-media     the audio collections (music / bible-audio / sermons-audio)
+#   /home/ee/audio          the audio collections (musik / predigt / bible / books / ...)
 #   the secret files under /home/ee/.ssh/ (aria-*)
 #   vllm-pod-bridge.service running (the vLLM tunnel is loopback-only on the host)
 #   a runner registered in THIS repo (label "li7") — the li7 machine already

@@ -11,7 +11,7 @@
 //! It (re)adds:
 //!   * the `aria-ask` container (the ASK protocol + /stream + /art + the scanner)
 //!   * the hostPath mounts the pod actually needs on li7:
-//!       /var/lib/aria-media   -> /media   (the audio files; both containers)
+//!       /home/ee/audio        -> /media   (the audio files; both containers)
 //!       /var/lib/aria-data    -> /data    (knowledge base; both containers)
 //!       /var/lib/aria-lancedb -> /vector  (embedded LanceDB; brain only)
 //!   * the named service ports (api + ask)
@@ -137,7 +137,7 @@ const VOLUMES_NEW: &str = r#"      volumes:
         # DirectoryOrCreate: an empty /media just means an empty catalog.
         - name: media
           hostPath:
-            path: /var/lib/aria-media
+            path: /home/ee/audio
             type: DirectoryOrCreate
         # li7 (injected): the knowledge base (the scan's media.jsonl.gz,
         # the sermon scripts) + the embedded LanceDB. Plain Directory: a

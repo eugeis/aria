@@ -39,25 +39,22 @@ data_dir = "/data/adapter"
 #              folder hierarchy fills missing artist/album)
 #   audiobook  one immediate subfolder per book; its files are the chapters
 #   sermon     recursive; any audio file is one recording ("YYYY-MM-DD - T.mp3")
+#
+# The /media root is the li7 host dir /home/ee/audio (deploy/li7/inject.rs).
 [collections]
 # Re-scan every N seconds; a changed scan republishes media.jsonl.gz and
 # asks the brain to reindex. 0 = never (rely on `aria-ask scan`).
 rescan_secs = 3600
 
 [[collections.items]]
-name = "rock"
+name = "musik"
 kind = "music"
-path = "/media/rock"
+path = "/media/musik"
 
 [[collections.items]]
-name = "bible-audio"
-kind = "audiobook"
-path = "/media/bible-audio"
-
-[[collections.items]]
-name = "sermons"
+name = "predigt"
 kind = "sermon"
-path = "/media/sermons-audio"
+path = "/media/predigt"
 
 # The brain (the rendered Mosaic app). In the li7 pod this is loopback.
 [brain]

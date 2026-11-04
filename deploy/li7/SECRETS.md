@@ -20,7 +20,7 @@ Missing files do not fail the deploy — the matching surface fails soft
 ## Host directories (create before the first deploy)
 
 ```
-sudo mkdir -p /var/lib/aria-data /var/lib/aria-lancedb /var/lib/aria-media
+sudo mkdir -p /var/lib/aria-data /var/lib/aria-lancedb
 ```
 
 - `/var/lib/aria-data` — ext4 (NOT exFAT). The brain corpus
@@ -30,27 +30,25 @@ sudo mkdir -p /var/lib/aria-data /var/lib/aria-lancedb /var/lib/aria-media
 - `/var/lib/aria-lancedb` — ext4 (NOT exFAT — LanceDB's commit protocol
   `linkat`s manifests; exFAT fails with EPERM and the vector table silently
   goes stale).
-- `/var/lib/aria-media` — the audio collections. Layout the adapter scans:
+- `/home/ee/audio` — the audio collections (mounted at `/media` in the pod
+  via the injector). The adapter scans the two collections wired in the
+  baked config (`adapter/config/aria.example.toml`):
 
   ```
-  /var/lib/aria-media/
-  ├── rock/                  (kind: music — root/Artist/Album/nn - title.mp3)
-  │   └── Queen/
-  │       └── A Night at the Opera/
-  │           ├── 01 - Bohemian Rhapsody.mp3
-  │           └── ...
-  ├── bible-audio/           (kind: audiobook — one subfolder per book)
-  │   └── Psalmen/
-  │       ├── 001 - Psalm 1.mp3
-  │       └── 002 - Psalm 2.mp3
-  └── sermons-audio/         (kind: sermon — "YYYY-MM-DD - Title.mp3")
-      └── 2026-05-10 - Grace Upon Grace.mp3
+  /home/ee/audio/
+  ├── musik/      (kind: music — folders map to artist/album when tags
+  │                are missing; ~330 files)
+  ├── predigt/    (kind: sermon — every audio file is one recording;
+  │                ~380 files, subfolders are series)
+  ├── bible/      (per-translation audio — not yet wired: the
+  │                TNI/NN_Book layout needs an audiobook mapping)
+  ├── books/ deusch-lernen/ seminar/   (available for new collections)
+  └── ...
   ```
 
   MP3 and AAC (m4a/m4b) stream to the Echo; FLAC is indexed but not
-  playable. Add more collections by editing the baked config
-  (`adapter/config/aria.example.toml` → rebuild the `mosaic/aria-ask` image)
-  or by mounting a config volume.
+  playable. Add a collection by editing the baked config's
+  `[collections]` items (→ rebuild the `mosaic/aria-ask` image).
 
 ## The vLLM bridge (why `gpu.datalab.siemens.com` resolves the way it does)
 
@@ -116,7 +114,7 @@ kubectl -n aria rollout restart deployment/aria
 
 Real content gets in two ways:
 
-1. **The adapter (media metadata):** drop audio into `/var/lib/aria-media`;
+1. **The adapter (media metadata):** drop audio into `/home/ee/audio`;
    the periodic rescan publishes `/data/knowledge/media/media.jsonl.gz` and
    POSTs `/api/ops/reindex`. An EMPTY scan never publishes — a missing or
    empty media dir cannot wipe the catalog from the brain.

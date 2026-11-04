@@ -174,7 +174,7 @@ Run workflow, `ref: main`). It:
    (`/data`, `/vector` on ext4; **re-apply after every upgrade** — the patch
    does not survive a re-render) + the rollout wait + in-pod smoke.
 
-Drop audio into `/var/lib/aria-media/…` (the layout in SECRETS.md) and
+Drop audio into `/home/ee/audio/…` on li7 (the layout in SECRETS.md) and
 `kubectl -n aria rollout restart deployment/aria` — the adapter's initial
 scan publishes the metadata and the brain reindexes on its next boot.
 
