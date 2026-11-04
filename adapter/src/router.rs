@@ -17,7 +17,7 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
 
     match kind {
         IntentKind::Launch => ResponseBuilder::new()
-            .say("Aria is ready. Say play some music, or ask me anything.")
+            .say("Aria ist bereit. Sag etwa: spiel Musik, oder frage mich etwas.")
             .end_session()
             .build(),
         IntentKind::SessionEnded | IntentKind::SystemRequest => {
@@ -27,15 +27,16 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
         }
         IntentKind::Help => ResponseBuilder::new()
             .say(
-                "You can say: play a song, album, artist, or genre. Play an audiobook, or say \
-                 continue plus the book to resume it. Play radio plus a station name. \
-                 Play, pause, stop, next, previous, or jump to a time. Shuffle, repeat this song, \
-                 or repeat all. And you can just ask me a question — I will answer.",
+                "Du kannst sagen: spiel einen Song, ein Album, einen Künstler oder ein Genre. \
+                 Spiel ein Hörbuch, oder sag weiter plus der Titel, um es fortzusetzen. \
+                 Sag Radio plus Sendernamen. Weiter, pausiere, stoppe, nächster Titel, \
+                 vorheriger Titel, oder springe zu einer Zeit. Zufall, wiederhole diesen Titel, \
+                 oder wiederhole alles. Und du kannst mich einfach etwas fragen — ich antworte.",
             )
             .end_session()
             .build(),
         IntentKind::Cancel => ResponseBuilder::new()
-            .say("Okay, bye.")
+            .say("Bis bald.")
             .end_session()
             .build(),
 
@@ -44,7 +45,7 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
         IntentKind::Pause => {
             state.save_state();
             ResponseBuilder::new()
-                .say("Paused.")
+                .say("Pausiert.")
                 .pause_audio()
                 .end_session()
                 .build()
@@ -52,7 +53,7 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
         IntentKind::Stop => {
             stop_device(state, &device);
             ResponseBuilder::new()
-                .say("Stopped.")
+                .say("Gestoppt.")
                 .stop_audio()
                 .end_session()
                 .build()
@@ -73,23 +74,23 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
         IntentKind::PlaybackFailed => handle_advance(state, &device, &env, true).await,
 
         IntentKind::ToggleShuffle => handle_shuffle(state, &device),
-        IntentKind::RepeatOne => set_repeat(state, &device, Repeat::One, "Repeating this song."),
+        IntentKind::RepeatOne => set_repeat(state, &device, Repeat::One, "Ich wiederhole diesen Titel."),
         IntentKind::RepeatAll => {
-            set_repeat(state, &device, Repeat::All, "Repeating the whole queue.")
+            set_repeat(state, &device, Repeat::All, "Ich wiederhole die ganze Warteschlange.")
         }
-        IntentKind::RepeatOff => set_repeat(state, &device, Repeat::Off, "Repeat off."),
+        IntentKind::RepeatOff => set_repeat(state, &device, Repeat::Off, "Wiederholung aus."),
         IntentKind::Seek { offset_ms } => handle_seek(state, &device, offset_ms),
 
         IntentKind::Ask { utterance } => handle_agent_turn(state, &device, &utterance).await,
         IntentKind::Fallback { utterance } => match utterance {
             Some(u) => handle_agent_turn(state, &device, &u).await,
             None => ResponseBuilder::new()
-                .say("I didn't catch that. Say ask aria plus your question, or play some music.")
+                .say("Das habe ich nicht verstanden. Sag frage plus deine Frage, oder spiel etwas.")
                 .end_session()
                 .build(),
         },
         IntentKind::Unknown { .. } => ResponseBuilder::new()
-            .say("I can play music or answer questions. Try play some music, or ask me something.")
+            .say("Ich kann Musik abspielen oder Fragen beantworten. Sag spiel Musik, oder stell mir eine Frage.")
             .end_session()
             .build(),
     }
@@ -110,11 +111,11 @@ async fn handle_agent_turn(state: &Arc<AppState>, device: &str, utterance: &str)
             ResponseBuilder::new().say(&text).end_session().build()
         }
         Err(AgentError::Connect(_)) => ResponseBuilder::new()
-            .say("I can't reach my brain right now. Check that the Aria service is running.")
+            .say("Ich erreiche meinen Dienst gerade nicht. Prüfe, ob Aria läuft.")
             .end_session()
             .build(),
         Err(_) => ResponseBuilder::new()
-            .say("The brain hit an error. Try again in a moment.")
+            .say("Da gab es einen Fehler. Versuch es kurz gleich noch einmal.")
             .end_session()
             .build(),
     }
@@ -395,7 +396,7 @@ fn find_radio_by_slug(state: &AppState, slug: &str) -> Option<(String, String)> 
 
 fn not_found_response(q: &str) -> Response {
     ResponseBuilder::new()
-        .say(format!("Sorry, I couldn't find {q} in your collections."))
+        .say(format!("Leider habe ich {q} nicht in deinen Sammlungen gefunden."))
         .end_session()
         .build()
 }
@@ -442,7 +443,7 @@ fn play_queue(state: &Arc<AppState>, device: &str, ids: Vec<u64>) -> Response {
         Some(id) => id,
         None => {
             return ResponseBuilder::new()
-                .say("Nothing to play.")
+                .say("Nichts zum Abspielen.")
                 .end_session()
                 .build();
         }
@@ -466,13 +467,13 @@ pub fn start_file(
     let lib = state.library.read().unwrap();
     let Some(track) = lib.get(track_id) else {
         return ResponseBuilder::new()
-            .say("I couldn't find that track.")
+            .say("Den Titel konnte ich nicht finden.")
             .end_session()
             .build();
     };
     if !track.playable {
         return ResponseBuilder::new()
-            .say("That file is not in a format Echo can stream. MP3 and AAC work.")
+            .say("Das Format kann der Echo nicht abspielen. MP3 und AAC funktionieren.")
             .end_session()
             .build();
     }
@@ -520,9 +521,9 @@ pub fn start_file(
     );
     let mut b = ResponseBuilder::new();
     b.say(if artist.trim().is_empty() {
-        format!("Playing {title}.")
+        format!("Ich spiele {title}.")
     } else {
-        format!("Playing {title} by {artist}.")
+        format!("Ich spiele {title} von {artist}.")
     })
     .play_audio(item)
     .end_session();
@@ -539,7 +540,7 @@ fn resume_stream(
 ) -> Response {
     let Some(resolved) = state.registry.resolve(token) else {
         return ResponseBuilder::new()
-            .say("That stream has expired. Say play to start again.")
+            .say("Der Stream ist abgelaufen. Sag spiel, um neu zu starten.")
             .end_session()
             .build();
     };
@@ -602,7 +603,7 @@ fn start_radio(state: &Arc<AppState>, device: &str, url: String, name: String) -
         None,
     );
     ResponseBuilder::new()
-        .say(format!("Playing {name}."))
+        .say(format!("Ich spiele {name}."))
         .play_audio(item)
         .end_session()
         .build()
@@ -653,7 +654,8 @@ fn handle_play_noquery(state: &Arc<AppState>, device: &str, env: &Envelope) -> R
         }
         None => ResponseBuilder::new()
             .say(
-                "Your music library is empty. Add MP3 or AAC files to the library folders, then ask me to play.",
+                "Deine Musiksammlung ist leer. Lege MP3- oder AAC-Dateien in die \
+                 Bibliotheksordner, und sag dann, ich soll etwas abspielen.",
             )
             .end_session()
             .build(),
@@ -679,7 +681,7 @@ async fn handle_next(state: &Arc<AppState>, device: &str, env: &Envelope) -> Res
     match next {
         Some(id) => start_file(state, device, id, 0, expected),
         None => ResponseBuilder::new()
-            .say("That was the last one in the queue.")
+            .say("Das war der letzte in der Warteschlange.")
             .end_session()
             .build(),
     }
@@ -695,7 +697,7 @@ fn handle_previous(state: &Arc<AppState>, device: &str, env: &Envelope) -> Respo
     match prev {
         Some(id) => start_file(state, device, id, 0, expected),
         None => ResponseBuilder::new()
-            .say("Nothing is playing.")
+            .say("Es spielt gerade nichts.")
             .end_session()
             .build(),
     }
@@ -758,9 +760,9 @@ async fn handle_advance(
         Some(id) => start_file(state, device, id, 0, expected),
         None => ResponseBuilder::new()
             .say(if failed {
-                "Playback failed and the queue is empty."
+                "Die Wiedergabe ist fehlgeschlagen und die Warteschlange ist leer."
             } else {
-                "That was the last one in the queue."
+                "Das war der letzte in der Warteschlange."
             })
             .end_session()
             .build(),
@@ -778,9 +780,9 @@ fn handle_shuffle(state: &Arc<AppState>, device: &str) -> Response {
         (
             p.shuffle,
             if p.shuffle {
-                "Shuffle on."
+                "Zufall an."
             } else {
-                "Shuffle off."
+                "Zufall aus."
             },
         )
     };
@@ -800,13 +802,13 @@ fn set_repeat(state: &Arc<AppState>, device: &str, repeat: Repeat, msg: &str) ->
 fn handle_seek(state: &Arc<AppState>, device: &str, offset_ms: Option<i64>) -> Response {
     let Some(off) = offset_ms else {
         return ResponseBuilder::new()
-            .say("I couldn't understand that time. Try jump to 2 minutes 30 seconds.")
+            .say("Diese Zeit habe ich nicht verstanden. Sag zum Beispiel: springe zu 2 Minuten 30 Sekunden.")
             .end_session()
             .build();
     };
     if off < 0 {
         return ResponseBuilder::new()
-            .say("I can only seek forward.")
+            .say("Ich kann nur vorwärts spulen.")
             .end_session()
             .build();
     }
@@ -814,13 +816,13 @@ fn handle_seek(state: &Arc<AppState>, device: &str, offset_ms: Option<i64>) -> R
         let players = state.player();
         let Some(p) = players.get(device) else {
             return ResponseBuilder::new()
-                .say("Nothing is playing.")
+                .say("Es spielt gerade nichts.")
                 .end_session()
                 .build();
         };
         let Some(id) = p.current() else {
             return ResponseBuilder::new()
-                .say("Nothing is playing.")
+                .say("Es spielt gerade nichts.")
                 .end_session()
                 .build();
         };
