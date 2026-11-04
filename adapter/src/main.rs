@@ -104,22 +104,28 @@ async fn run_scan(cfg: &config::Config, reindex: bool) -> anyhow::Result<()> {
         .await
         .context("scan task panicked")?
         .map_err(anyhow::Error::msg)?;
-    let changed = scan::publish(cfg, &records)?;
-    println!(
-        "scanned {} item(s) ({} records); media.jsonl.gz {}",
-        library.len(),
-        records.len(),
-        if changed { "updated" } else { "unchanged" }
-    );
-    if changed && reindex {
-        match scan::reindex(cfg).await {
-            Ok(()) => println!("brain reindex requested"),
-            Err(e) => {
-                eprintln!(
-                    "brain reindex failed: {e} (the brain picks up the scan on its next boot)"
-                );
+    match scan::publish_if_nonempty(cfg, &library, &records)? {
+        Some(changed) => {
+            println!(
+                "scanned {} item(s) ({} records); media.jsonl.gz {}",
+                library.len(),
+                records.len(),
+                if changed { "updated" } else { "unchanged" }
+            );
+            if changed && reindex {
+                match scan::reindex(cfg).await {
+                    Ok(()) => println!("brain reindex requested"),
+                    Err(e) => {
+                        eprintln!(
+                            "brain reindex failed: {e} (the brain picks up the scan on its next boot)"
+                        );
+                    }
+                }
             }
         }
+        None => println!(
+            "scanned 0 item(s): nothing published (an empty scan must not wipe the catalog)"
+        ),
     }
     Ok(())
 }
@@ -140,12 +146,16 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
         .await
         .context("initial scan task panicked")?
         .map_err(anyhow::Error::msg)?;
-    let changed = scan::publish(&cfg, &records).context("publish media.jsonl.gz")?;
-    if changed && !cfg.brain.mock {
-        match scan::reindex(&cfg).await {
-            Ok(()) => tracing::info!("brain reindex requested after initial scan"),
-            Err(e) => tracing::warn!(%e, "brain reindex after initial scan failed"),
+    match scan::publish_if_nonempty(&cfg, &library, &records).context("publish media.jsonl.gz")? {
+        Some(changed) => {
+            if changed && !cfg.brain.mock {
+                match scan::reindex(&cfg).await {
+                    Ok(()) => tracing::info!("brain reindex requested after initial scan"),
+                    Err(e) => tracing::warn!(%e, "brain reindex after initial scan failed"),
+                }
+            }
         }
+        None => tracing::info!("no media found yet — keeping the published catalog intact"),
     }
 
     let agent: Arc<dyn agent::AgentBackend> = if cfg.brain.mock {
@@ -177,8 +187,8 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
                         }
                         Err(_) => continue,
                     };
-                match scan::publish(&st.cfg, &records) {
-                    Ok(true) => {
+                match scan::publish_if_nonempty(&st.cfg, &lib, &records) {
+                    Ok(Some(true)) => {
                         if !st.cfg.brain.mock {
                             match scan::reindex(&st.cfg).await {
                                 Ok(()) => tracing::info!(
@@ -189,7 +199,8 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
                             }
                         }
                     }
-                    Ok(false) => {}
+                    Ok(Some(false)) => {}
+                    Ok(None) => {} // empty scan: catalog untouched
                     Err(e) => tracing::warn!(%e, "publish after rescan failed"),
                 }
                 let n = lib.len();

@@ -272,6 +272,11 @@ pub fn records_to_jsonl(records: &[serde_json::Value]) -> Vec<u8> {
 
 /// Write the scan output atomically (tmp + rename) when changed.
 /// Returns true when the file was rewritten (the brain should reindex).
+///
+/// Guard: an EMPTY scan (the media dir is empty or briefly unmounted) must
+/// never wipe a previously published catalog — that would erase the
+/// library metadata (the seeded sample corpus, or a real library during a
+/// transient mount failure) from the brain's knowledge base.
 pub fn publish(cfg: &Config, records: &[serde_json::Value]) -> std::io::Result<bool> {
     let out = cfg.scan_out_path();
     if let Some(dir) = out.parent() {
@@ -281,10 +286,46 @@ pub fn publish(cfg: &Config, records: &[serde_json::Value]) -> std::io::Result<b
     if std::fs::read(&out).map(|old| old == new).unwrap_or(false) {
         return Ok(false);
     }
+    if records.is_empty() && existing_has_records(&out) {
+        return Ok(false);
+    }
     let tmp = out.with_extension("jsonl.tmp");
     std::fs::write(&tmp, &new)?;
     std::fs::rename(&tmp, &out)?;
     Ok(true)
+}
+
+/// True when the published file at `out` decodes to at least one record
+/// (one JSON line each). A missing or undecodable file counts as empty.
+fn existing_has_records(out: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(old) = std::fs::read(out) else {
+        return false;
+    };
+    let mut dec = flate2::read::GzDecoder::new(&old[..]);
+    let mut buf = Vec::new();
+    if dec.read_to_end(&mut buf).is_err() {
+        return false;
+    }
+    buf.contains(&b'\n')
+}
+
+/// Publish the catalog ONLY when the scan saw an actual library.
+///
+/// An empty scan (media dir missing or briefly unmounted, collections not
+/// created yet) must never publish — even the config's radio presets alone
+/// would form a non-empty record set and wipe the previously published
+/// corpus out of the brain's knowledge base. Returns `Some(changed)` when
+/// a publish happened, `None` when the empty scan was skipped.
+pub fn publish_if_nonempty(
+    cfg: &Config,
+    library: &Library,
+    records: &[serde_json::Value],
+) -> std::io::Result<Option<bool>> {
+    if library.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(publish(cfg, records)?))
 }
 
 /// Ask the brain to reindex its knowledge (the adapter's service token).
@@ -364,5 +405,83 @@ mod tests {
         assert_eq!(slugify("A Night at the Opera"), "a-night-at-the-opera");
         assert_eq!(slugify("Psalmen"), "psalmen");
         assert_eq!(slugify("---x---"), "x");
+    }
+
+    fn cfg_with_out(out: &std::path::Path) -> Config {
+        toml::from_str(&format!(
+            r#"
+            [server]
+            bind = "127.0.0.1:0"
+            [scan]
+            out_path = "{}"
+            [radio.stations]
+            "rock fm" = "https://r.example/rock.mp3"
+            "#,
+            out.display().to_string().replace('"', "\\\"")
+        ))
+        .expect("test config parses")
+    }
+
+    #[test]
+    fn publish_creates_and_updates() {
+        let dir = std::env::temp_dir().join(format!("aria-scan-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("media.jsonl.gz");
+        let cfg = cfg_with_out(&out);
+        assert!(
+            publish(&cfg, &[]).unwrap(),
+            "first publish (no file yet) creates it"
+        );
+        assert!(out.exists());
+        // A non-empty catalog publishes; identical content does not republish.
+        let one = vec![serde_json::json!({"slug": "trk:0001", "text": "t", "kind_media": "track"})];
+        assert!(publish(&cfg, &one).unwrap(), "changed content publishes");
+        assert!(
+            !publish(&cfg, &one).unwrap(),
+            "identical content does not republish"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn empty_library_publishes_nothing() {
+        let dir = std::env::temp_dir().join(format!("aria-scan-test-lib-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("media.jsonl.gz");
+        let cfg = cfg_with_out(&out);
+        let lib = Library::empty();
+        // Config radio presets alone must NOT form a publishable catalog.
+        let records = build_records(&lib, &cfg);
+        assert!(
+            matches!(publish_if_nonempty(&cfg, &lib, &records), Ok(None)),
+            "an empty library never publishes (even with radio presets present)"
+        );
+        assert!(!out.exists(), "nothing was written");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn empty_scan_never_wipes_a_populated_catalog() {
+        let dir = std::env::temp_dir().join(format!("aria-scan-test-wipe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("media.jsonl.gz");
+        let cfg = cfg_with_out(&out);
+        let recs = vec![
+            serde_json::json!({"slug": "trk:0001", "text": "a", "kind_media": "track"}),
+            serde_json::json!({"slug": "alb:x", "text": "b", "kind_media": "album"}),
+        ];
+        assert!(publish(&cfg, &recs).unwrap());
+        // The media dir goes away (or is empty) -> the scan yields nothing.
+        // The published catalog must survive.
+        assert!(
+            !publish(&cfg, &[]).unwrap(),
+            "an empty scan must not overwrite a populated catalog"
+        );
+        let old = std::fs::read(&out).unwrap();
+        assert_eq!(old, gzip_deterministic(&records_to_jsonl(&recs)));
+        // ...and an empty scan over an empty (or missing) file is allowed.
+        std::fs::remove_file(&out).unwrap();
+        assert!(publish(&cfg, &[]).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

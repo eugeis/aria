@@ -98,9 +98,11 @@ POST http://127.0.0.1:3000/api/ops/reindex   (the adapter's service token)
 brain delta-ingest (ADR 0019: unchanged files keep entries + embeddings)
 ```
 
-Fresh host: the brain boots fine with an empty `knowledge/media` (fail-soft
-ingest) + the committed SAMPLE corpus baked into the image; the adapter's
-initial scan fills in the real catalog.
+Fresh host: the image carries only the binaries (house pattern — the
+knowledge base lives on the host, seeded once per `deploy/li7/SECRETS.md`).
+The brain boots fine with an empty `knowledge/` (fail-soft ingest); the
+adapter's scans fill in the real catalog — and an EMPTY scan never
+publishes, so a missing media dir cannot wipe the catalog from the brain.
 
 The slugs are the contract between the two halves: the brain's
 `resolve-play` returns a slug; the adapter maps `trk:NNNN`/`serm:NNNN` →

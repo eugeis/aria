@@ -97,11 +97,17 @@ app:
         engine: lancedb
       resources:
         cpu: "2"
-        # The corpora are small (a few thousand metadata records + a couple
-        # of hundred sermon scripts) — the boot peak is a fraction of the
-        # bible app's. The adapter sidecar is co-resident (deploy/li7/
-        # inject-sidecars.py) but light (no corpus of its own).
-        memory: "6Gi"
+        # The corpora are TINY (a few thousand metadata records + a couple
+        # of hundred sermon scripts — local embedder, milliseconds to boot);
+        # 512 Mi covers steady state AND boot peak with margin. The adapter
+        # sidecar is co-resident (deploy/li7/inject-sidecars.py, 128 Mi
+        # requested) — together the pod asks for ~0.6 Gi.
+        # NOTE: li7 is memory-tight (bible 51 Gi + pages 8 Gi + co-tenants
+        # ≈ 61 Gi of 61.5 Gi allocatable). This size was chosen so the pod
+        # ALSO schedules on a full cold node restart, next to bible's
+        # cold-boot 51-Gi request. Do not raise it without freeing
+        # something else on the node.
+        memory: "512Mi"
 
 # ADR 0017: the voice brain's LLM — deepseek-v4-flash on the in-house vLLM
 # (the datalab GPU box; MOAIC_CHAT_API_KEY carries the bearer, as on the

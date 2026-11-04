@@ -52,19 +52,72 @@ sudo mkdir -p /var/lib/aria-data /var/lib/aria-lancedb /var/lib/aria-media
   (`adapter/config/aria.example.toml` → rebuild the `mosaic/aria-ask` image)
   or by mounting a config volume.
 
+## The vLLM bridge (why `gpu.datalab.siemens.com` resolves the way it does)
+
+The voice brain's model registry points at
+`https://gpu.datalab.siemens.com:8902/vllm/v1` — a reverse SSH tunnel that
+listens on **127.0.0.1:8902 of the li7 host** (the domain maps to
+`127.0.0.1` in the host's `/etc/hosts`; sshd binds the listener to loopback
+by default). Pods cannot see the host's `/etc/hosts`, so two li7-local bits
+make it work (both re-created automatically if lost):
+
+* `vllm-pod-bridge.service` (systemd, `Restart=always`): a socat that
+  forwards `192.168.11.63:8902` (the node IP) → `127.0.0.1:8902`.
+  ```
+  sudo tee /etc/systemd/system/vllm-pod-bridge.service <<'EOF'
+  [Unit]
+  Description=Bridge the loopback vLLM SSH tunnel (127.0.0.1:8902) to the node IP for k8s pods
+  After=network.target
+  [Service]
+  ExecStart=/usr/bin/socat TCP-LISTEN:8902,bind=192.168.11.63,reuseaddr,fork TCP:127.0.0.1:8902
+  Restart=always
+  RestartSec=2
+  [Install]
+  WantedBy=multi-user.target
+  EOF
+  sudo systemctl daemon-reload && sudo systemctl enable --now vllm-pod-bridge.service
+  ```
+* The chart's pod spec carries a `hostAliases` entry aliasing
+  `gpu.datalab.siemens.com` → `192.168.11.63` (injected by
+  `inject-sidecars.py`, so a re-render never loses it). The TLS chain
+  validates strictly (the vLLM endpoint presents a cert for the domain).
+
+The tunnel session itself is the fragile part: it is an `ssh -R` from the
+GPU-side machine, not systemd-managed. If LLM answers stop working, check
+`sudo ss -tlnp | grep 8902` on li7 for the sshd listener.
+
+## Memory budget (do not raise requests casually)
+
+li7 has **61.5 Gi allocatable** and co-tenants (bible ~51 Gi, pages ~8 Gi,
+mosaic-app 1 replica, …) already reserve ~60 Gi. The aria pod requests
+**0.5 Gi (brain) + 0.125 Gi (adapter)** — sized to schedule even on a full
+cold node restart. The rollout strategy is no-surge (`maxSurge: 0`,
+`maxUnavailable: 1`, injected): an old aria pod and its replacement may
+never both be scheduled. A post-helm `kubectl patch` of the pod template
+spawns a second ReplicaSet and can deadlock the rollout — the injector
+bakes everything into the template so one `helm upgrade` is final.
+
 ## Stage the corpus before the first boot
 
-The brain ingests `knowledge/media` + `knowledge/sermons` under
-`MOAIC_KNOWLEDGE_BASE=/data`. On a fresh host the directories are empty
-(fail-soft boot — the app is ready, the KBs just have the committed sample
-corpus baked into the image). Two ways to get real content in:
+The rendered image carries ONLY the `aria` binary (the house pattern, same
+as bible) — the knowledge base lives on the host and is ingested from
+`MOAIC_KNOWLEDGE_BASE=/data` at boot. Seed the committed sample corpus once
+(15 media records + the sample sermon script):
 
-1. **Let the adapter do it (recommended):** the adapter's initial scan
-   publishes `/data/knowledge/media/media.jsonl.gz` and POSTs
-   `/api/ops/reindex`. Just drop audio into `/var/lib/aria-media` and
-   restart the pod (`kubectl -n aria rollout restart deployment/aria`).
+```
+sudo mkdir -p /var/lib/aria-data/knowledge/{media,sermons}
+sudo cp <rendered-out>/knowledge/media/media.jsonl.gz /var/lib/aria-data/knowledge/media/
+sudo cp <rendered-out>/knowledge/sermons/*.md        /var/lib/aria-data/knowledge/sermons/
+sudo chown -R $(id -u):$(id -g) /var/lib/aria-data/knowledge   # app runs as root; keep it host-user-owned for easy cp
+kubectl -n aria rollout restart deployment/aria
+```
+
+Real content gets in two ways:
+
+1. **The adapter (media metadata):** drop audio into `/var/lib/aria-media`;
+   the periodic rescan publishes `/data/knowledge/media/media.jsonl.gz` and
+   POSTs `/api/ops/reindex`. An EMPTY scan never publishes — a missing or
+   empty media dir cannot wipe the catalog from the brain.
 2. **Sermon scripts:** sync them to `/var/lib/aria-data/knowledge/sermons/`
    (markdown, the eugeis/sermons `content/` flattened) + restart the pod —
-   or `kubectl -n aria exec deploy/aria -c aria -- wget -qO- -X POST -H
-   'Content-Type: application/json' -H "Authorization: Bearer $ADMIN_JWT"
-   --post-data='{}' http://127.0.0.1:3000/api/ops/reindex`.
+   or POST `/api/ops/reindex` with the `adapter` service token.
