@@ -280,6 +280,26 @@ fn main() {
     // would otherwise mask the volumes step on a fresh chart.
     let original = text.clone();
 
+    // Re-injecting a chart that ALREADY carries the sidecar must still
+    // refresh its image tag — the insertion block below is skipped when
+    // "aria-ask" is present, which would otherwise leave the old tag in
+    // place (the deploy then ships the previous adapter build).
+    {
+        const PREFIX: &str = "mosaic/aria-ask:";
+        if let Some(i) = text.find(PREFIX) {
+            let start = i + PREFIX.len();
+            let rest = &text[start..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                .unwrap_or(0);
+            let old = rest[..end].to_string();
+            if old != tag {
+                text.replace_range(start..start + end, &tag);
+                println!("refreshed the aria-ask sidecar tag {old} -> {tag} in {dep:?}");
+            }
+        }
+    }
+
     if !original.contains("aria-ask") {
         if !replace_once(&mut text, BRAIN_MOUNTS_OLD, &format!("{BRAIN_MOUNTS_PRELUDE}{sidecar}")) {
             eprintln!("ERROR: brain volumeMounts anchor not found in {dep:?} (chart changed? re-check the injection point)");

@@ -83,7 +83,17 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
 
         IntentKind::Ask { utterance } => handle_agent_turn(state, &device, &utterance).await,
         IntentKind::Fallback { utterance } => match utterance {
-            Some(u) => handle_agent_turn(state, &device, &u).await,
+            Some(u) => {
+                // Play-like fallback: "mein aria, spiel X" can arrive here
+                // when the PlayMusicIntent match loses confidence to the
+                // transcript. Route it to the REAL play path instead of
+                // letting the RAG LLM talk about the track.
+                if let Some(q) = strip_play_prefix(&u) {
+                    handle_play_music(state, &device, Some(q)).await
+                } else {
+                    handle_agent_turn(state, &device, &u).await
+                }
+            }
             None => ResponseBuilder::new()
                 .say("Das habe ich nicht verstanden. Sag frage plus deine Frage, oder spiel etwas.")
                 .end_session()
@@ -119,6 +129,21 @@ async fn handle_agent_turn(state: &Arc<AppState>, device: &str, utterance: &str)
             .end_session()
             .build(),
     }
+}
+
+/// Play-like prefixes a Fallback transcript can carry ("spiel X",
+/// "spiele X", "mach X an", "leg X auf") — returns the remaining query.
+fn strip_play_prefix(u: &str) -> Option<String> {
+    let l = u.to_lowercase();
+    for p in ["spiele ", "spiel ", "mach ", "leg "] {
+        if l.starts_with(p) {
+            let q = u[p.len()..].trim();
+            if !q.is_empty() {
+                return Some(q.to_string());
+            }
+        }
+    }
+    None
 }
 
 // ── Music: play ────────────────────────────────────────────────────────────
@@ -473,7 +498,11 @@ pub fn start_file(
     };
     if !track.playable {
         return ResponseBuilder::new()
-            .say("Das Format kann der Echo nicht abspielen. MP3 und AAC funktionieren.")
+            .say(format!(
+                "Leider: {} — der Echo kann das Format {} nicht abspielen. MP3 und AAC funktionieren.",
+                track.title,
+                track.format_str()
+            ))
             .end_session()
             .build();
     }
