@@ -230,6 +230,8 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
         .route("/alexa", axum::routing::post(stream::handle_alexa))
         .route("/stream/{token}", get(stream::handle_stream))
         .route("/art/{id}", get(stream::handle_art))
+        .route("/skill-icons/icon-108.png", get(stream::handle_icon_108))
+        .route("/skill-icons/icon-512.png", get(stream::handle_icon_512))
         .route("/health", get(stream::handle_health))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);

@@ -189,25 +189,30 @@ caveat above). One-time console setup at [developer.amazon.com](https://develope
 2. **Endpoint**: set the HTTPS endpoint URI to
    `https://aria.eisler-systems.de/alexa` (must be a valid public TLS
    endpoint — the cert-manager cert makes that true). The console POSTs a
-   test envelope there on save; you need `server.client_id` set in the
-   adapter config (baked into the image) to the skill's
-   **Client ID** (`amzn1.ask.skill.…`, under Endpoint configuration) —
-   requests from other skills are rejected with an empty response.
+   test envelope there on save; it answers 200.
 3. **Interaction model**: import `skill/interaction-model.json`
    (invocation name `aria`; PlayMusicIntent + AskIntent + the playback
    controllers + notifiers + Fallback).
 4. **Manifest**: publish under en-US with the summary/description from
-   `skill/skill-manifest.json`; host the skill icons
-   (`icon-108.png` / `icon-512.png`) anywhere public — e.g. under
-   `https://aria.eisler-systems.de/skill-icons/` (add a `/skill-icons`
-   ingress rule or a small static file in the adapter if you go that route).
+   `skill/skill-manifest.json`. The skill icons are already hosted —
+   `https://aria.eisler-systems.de/skill-icons/icon-108.png` and
+   `…/icon-512.png` (served by the adapter; baked into its binary). The
+   manifest's `smallIconUri` / `largeIconUri` point at them.
 5. **Enable the `AUDIO_PLAYER` interface** (Endpoint configuration →
    Interfaces). Required for `AudioPlayer.Play` + the playback notifiers.
-6. **Test**: stay in the skill's **Development** stage — no certification
+6. **Pin the skill's Client ID** (so other skills can't hit the endpoint):
+   copy the **Client ID** (`amzn1.ask.skill.…`, shown under Endpoint
+   configuration) into the adapter's env —
+   `kubectl -n aria set env deploy/aria -c aria-ask ARIA_CLIENT_ID=amzn1.ask.skill.…`
+   (a `set env` triggers a rolling restart; the request check then rejects
+   any skill with a different application id with an empty response).
+   Leave it unset while you are still iterating — an empty value means the
+   check is off.
+7. **Test**: stay in the skill's **Development** stage — no certification
    needed for a personal skill; it works on your own account's Echo devices
    immediately. (Publishing to Production is optional and only makes sense
    for other people's accounts.)
-7. On the Echo: "Alexa, open aria" or "Alexa, ask aria to play …".
+8. On the Echo: "Alexa, open aria" or "Alexa, ask aria to play …".
 
 ## Roadmap
 

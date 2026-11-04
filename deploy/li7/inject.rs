@@ -234,6 +234,14 @@ const INGRESS_NEW: &str = r#"        paths:
                 name: {{ include "aria.fullname" $root }}
                 port:
                   number: 8090
+          # The Alexa skill icons (served by the adapter, baked in).
+          - path: /skill-icons
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aria.fullname" $root }}
+                port:
+                  number: 8090
           - path: /
             pathType: Prefix
             backend:

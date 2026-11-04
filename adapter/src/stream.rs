@@ -199,6 +199,28 @@ pub async fn handle_health(State(state): State<Arc<AppState>>) -> impl IntoRespo
     }))
 }
 
+/// The Alexa skill icons, baked into the binary (the developer console
+/// requires public icon URLs; these serve them at /skill-icons/…).
+const ICON_108_PNG: &[u8] = include_bytes!("../static/skill-icons/icon-108.png");
+const ICON_512_PNG: &[u8] = include_bytes!("../static/skill-icons/icon-512.png");
+
+fn icon_response(bytes: &'static [u8]) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/png")
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .body(Body::from(bytes.to_vec()))
+        .expect("static icon response builds")
+}
+
+pub async fn handle_icon_108() -> Response {
+    icon_response(ICON_108_PNG)
+}
+
+pub async fn handle_icon_512() -> Response {
+    icon_response(ICON_512_PNG)
+}
+
 /// Size in bytes of a leading ID3v2 tag, or 0 if the file has none.
 async fn id3_tag_size(file: &File) -> u64 {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
