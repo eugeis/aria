@@ -17,6 +17,16 @@ the workflow strips it).
 Missing files do not fail the deploy — the matching surface fails soft
 (workflow LLM answers, the bible MCP tools, or auth) until the secret exists.
 
+**Alexa skill Client ID** (not a runner file — it is skill-configuration,
+pinned once on the live deployment, 2026-11): `ARIA_CLIENT_ID` on the
+`aria-ask` sidecar, set via
+`kubectl -n aria set env deploy/aria -c aria-ask ARIA_CLIENT_ID=amzn1.ask.skill.…`
+(value from the console's Endpoint configuration; never committed). The
+injector declares the env with `value: ""` in the chart, so helm 3-way
+merges (old == new == "") PRESERVE the live value across upgrades. Empty =
+the request check is off; set = any envelope from a different skill is
+rejected with a 54-byte empty response (verified 2026-11-04).
+
 ## Host directories (create before the first deploy)
 
 ```
