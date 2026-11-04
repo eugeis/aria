@@ -1,5 +1,41 @@
 {
   "calls": {
+    "370057469ddf901d": {
+      "request": {
+        "messages": [
+          {
+            "content": "You are Aria, the owner's personal voice assistant, heard through an\nAmazon Echo. Your answer is SPOKEN: one to three short, conversational\nsentences — no markdown, no lists, no code, no citation numbers.\nAnswer ONLY from the retrieved context below — mention only names\nand titles that appear in it. If the context does not answer the\nquestion, say so in one sentence instead of guessing. Never invent\ntitles, albums, artists or facts.\n",
+            "role": "system"
+          },
+          {
+            "content": "The owner just said: welche alben habe ich\n\nContext:\nMEDIA CATALOG (retrieved):\\nQueen — Künstler, Sammlung rock, 2 Alben, 3 Titel [art:queen]\\nNews of the World — Album von Queen (1977), 1 Titel [alb:queen-news]\\nHeroes — Album von David Bowie (1977), 1 Titel [alb:bowie-heroes]\\nDavid Bowie — Künstler, Sammlung rock, 2 Alben, 2 Titel [art:bowie]\\nA Night at the Opera — Album von Queen (1975), 2 Titel [alb:queen-night]\\nPsalm 23 — Der HERR ist mein Hirte (Psalmen: Kapitel 23) [abk:0001:ch:23]\\nPsalmen — Hörbuch, 2 Kapitel, gelesen von Martin Weber [abk:0001]\\nPsalm 1 — Der glückselbige Mensch (Psalmen: Kapitel 1) [abk:0001:ch:01]\\n\\nSERMON SCRIPTS (retrieved text):\\n\\n\\\"Have all received\\\" — the aorist of the verb: they took what was offered.\\nNothing in the verse says they qualified. The Greek is the same word the\\ntax collector used when he collected the toll: he received the coin that was\\nlaid in his hand. The order of the hands is the order of grace: the open hand\\nfirst, the coin second. | \\nMoses gave the law by hand; what came through Jesus Christ is grace and truth.\\nThe law is a syllable — necessary, sharp, pointing. The word is the whole\\nsentence: context, intention, end. Law without grace is a syllable repeated\\nuntil it becomes noise. Grace without law is a word without grammar — sweet\\nand unformed. The fullness holds both. | \\nThe preposition says \\\"upon\\\" — not a patch over the torn garment, but a layer\\non a layer. Each grace does not cancel the last; it stands on it. The man who\\nwas forgiven and forgave again: the second forgiveness is the first grace\\nreceiving its own shape. That is why grace accumulates where the law cannot:\\nthe law is a line you fall from; grace is a floor you build on. | \\nSomewhere in this week you have already received one grace you have not\\nthanked. Find it tonight. Name it out loud. The naming is not the payment —\\nthe payment is still not yours. The naming is where the \\\"upon\\\" begins.\\n\\n*Prayer: Lord, we have seen the glory — the quiet kind, the kind that stays.\\nKeep giving us the fullness. Amen.*",
+            "role": "user"
+          }
+        ],
+        "model": "deepseek/deepseek-v4-flash"
+      },
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "e2e-answer: I heard you, and here is what I found for you.",
+              "role": "assistant"
+            }
+          }
+        ],
+        "created": 0,
+        "id": "cap-8",
+        "model": "deepseek/deepseek-v4-flash",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
     "4d32846677c1ad02": {
       "request": {
         "messages": [
@@ -90,7 +126,7 @@
           }
         ],
         "created": 0,
-        "id": "cap-2",
+        "id": "cap-9",
         "model": "deepseek/deepseek-v4-flash",
         "object": "chat.completion",
         "usage": {
@@ -199,7 +235,7 @@
           }
         ],
         "created": 0,
-        "id": "cap-3",
+        "id": "cap-10",
         "model": "deepseek/deepseek-v4-flash",
         "object": "chat.completion",
         "usage": {
@@ -260,7 +296,7 @@
           }
         ],
         "created": 0,
-        "id": "cap-5",
+        "id": "cap-12",
         "model": "deepseek/deepseek-v4-flash",
         "object": "chat.completion",
         "usage": {
@@ -321,7 +357,7 @@
           }
         ],
         "created": 0,
-        "id": "cap-4",
+        "id": "cap-11",
         "model": "deepseek/deepseek-v4-flash",
         "object": "chat.completion",
         "usage": {
@@ -331,7 +367,7 @@
         }
       }
     },
-    "a85bc7ca7b5337a8": {
+    "d3a6610f3e611be9": {
       "request": {
         "messages": [
           {
@@ -339,7 +375,7 @@
             "role": "system"
           },
           {
-            "content": "The owner just said: what is playing on my heart right now?\n\nContext:\n{{context}}",
+            "content": "The owner just said: what is playing on my heart right now?\n\nContext:\nMEDIA CATALOG (retrieved):\\nHeroes — David Bowie, Heroes (1977), rock [trk:0004]\\nHeroes — Album von David Bowie (1977), 1 Titel [alb:bowie-heroes]\\nA Night at the Opera — Album von Queen (1975), 2 Titel [alb:queen-night]\\nGrace Upon Grace — Predigtaufnahme (2026-05-10), 35 min [serm:0001]\\nBohemian Rhapsody — Queen, A Night at the Opera (1975), rock [trk:0001]\\nWe Will Rock You — Queen, News of the World (1977), rock [trk:0003]\\nPsalmen — Hörbuch, 2 Kapitel, gelesen von Martin Weber [abk:0001]\\nPsalm 23 — Der HERR ist mein Hirte (Psalmen: Kapitel 23) [abk:0001:ch:23]\\n\\nSERMON SCRIPTS (retrieved text):\\n\\nThe preposition says \\\"upon\\\" — not a patch over the torn garment, but a layer\\non a layer. Each grace does not cancel the last; it stands on it. The man who\\nwas forgiven and forgave again: the second forgiveness is the first grace\\nreceiving its own shape. That is why grace accumulates where the law cannot:\\nthe law is a line you fall from; grace is a floor you build on. | \\nMoses gave the law by hand; what came through Jesus Christ is grace and truth.\\nThe law is a syllable — necessary, sharp, pointing. The word is the whole\\nsentence: context, intention, end. Law without grace is a syllable repeated\\nuntil it becomes noise. Grace without law is a word without grammar — sweet\\nand unformed. The fullness holds both. | \\nSomewhere in this week you have already received one grace you have not\\nthanked. Find it tonight. Name it out loud. The naming is not the payment —\\nthe payment is still not yours. The naming is where the \\\"upon\\\" begins.\\n\\n*Prayer: Lord, we have seen the glory — the quiet kind, the kind that stays.\\nKeep giving us the fullness. Amen.* | \\n\\\"Have all received\\\" — the aorist of the verb: they took what was offered.\\nNothing in the verse says they qualified. The Greek is the same word the\\ntax collector used when he collected the toll: he received the coin that was\\nlaid in his hand. The order of the hands is the order of grace: the open hand\\nfirst, the coin second.",
             "role": "user"
           }
         ],
@@ -357,7 +393,7 @@
           }
         ],
         "created": 0,
-        "id": "cap-1",
+        "id": "cap-7",
         "model": "deepseek/deepseek-v4-flash",
         "object": "chat.completion",
         "usage": {

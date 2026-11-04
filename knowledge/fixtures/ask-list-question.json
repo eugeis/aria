@@ -1,0 +1,269 @@
+{
+  "classify": {
+    "search_query": "Album Titel welche alben habe ich"
+  },
+  "find_media": {
+    "results": [
+      {
+        "context": "Queen",
+        "id": "knowledge-media-media-jsonl-gz#art:queen",
+        "locator": null,
+        "meta": {
+          "albums": 2,
+          "artist": "Queen",
+          "entry": "Queen",
+          "kind": "entries",
+          "kind_media": "artist",
+          "slug": "art:queen",
+          "source": "knowledge/media/media.jsonl.gz",
+          "text": "Queen — Künstler, Sammlung rock, 2 Alben, 3 Titel",
+          "tracks": 3
+        },
+        "quote": "Queen — Künstler, Sammlung rock, 2 Alben, 3 Titel",
+        "score": 0.016393442622950817,
+        "text": "Queen — Künstler, Sammlung rock, 2 Alben, 3 Titel"
+      },
+      {
+        "context": "News of the World",
+        "id": "knowledge-media-media-jsonl-gz#alb:queen-news",
+        "locator": null,
+        "meta": {
+          "album": "News of the World",
+          "artist": "Queen",
+          "collection": "rock",
+          "entry": "News of the World",
+          "kind": "entries",
+          "kind_media": "album",
+          "slug": "alb:queen-news",
+          "source": "knowledge/media/media.jsonl.gz",
+          "text": "News of the World — Album von Queen (1977), 1 Titel",
+          "tracks": 1,
+          "year": "1977"
+        },
+        "quote": "News of the World — Album von Queen (1977), 1 Titel",
+        "score": 0.01597782258064516,
+        "text": "News of the World — Album von Queen (1977), 1 Titel"
+      },
+      {
+        "context": "Heroes",
+        "id": "knowledge-media-media-jsonl-gz#alb:bowie-heroes",
+        "locator": null,
+        "meta": {
+          "album": "Heroes",
+          "artist": "David Bowie",
+          "collection": "rock",
+          "entry": "Heroes",
+          "kind": "entries",
+          "kind_media": "album",
+          "slug": "alb:bowie-heroes",
+          "source": "knowledge/media/media.jsonl.gz",
+          "text": "Heroes — Album von David Bowie (1977), 1 Titel",
+          "tracks": 1,
+          "year": "1977"
+        },
+        "quote": "Heroes — Album von David Bowie (1977), 1 Titel",
+        "score": 0.015873015873015872,
+        "text": "Heroes — Album von David Bowie (1977), 1 Titel"
+      },
+      {
+        "context": "David Bowie",
+        "id": "knowledge-media-media-jsonl-gz#art:bowie",
+        "locator": null,
+        "meta": {
+          "albums": 2,
+          "artist": "David Bowie",
+          "entry": "David Bowie",
+          "kind": "entries",
+          "kind_media": "artist",
+          "slug": "art:bowie",
+          "source": "knowledge/media/media.jsonl.gz",
+          "text": "David Bowie — Künstler, Sammlung rock, 2 Alben, 2 Titel",
+          "tracks": 2
+        },
+        "quote": "David Bowie — Künstler, Sammlung rock, 2 Alben, 2 Titel",
+        "score": 0.015607940446650124,
+        "text": "David Bowie — Künstler, Sammlung rock, 2 Alben, 2 Titel"
+      },
+      {
+        "context": "A Night at the Opera",
+        "id": "knowledge-media-media-jsonl-gz#alb:queen-night",
+        "locator": null,
+        "meta": {
+          "album": "A Night at the Opera",
+          "artist": "Queen",
+          "collection": "rock",
+          "entry": "A Night at the Opera",
+          "kind": "entries",
+          "kind_media": "album",
+          "slug": "alb:queen-night",
+          "source": "knowledge/media/media.jsonl.gz",
+          "text": "A Night at the Opera — Album von Queen (1975), 2 Titel",
+          "tracks": 2,
+          "year": "1975"
+        },
+        "quote": "A Night at the Opera — Album von Queen (1975), 2 Titel",
+        "score": 0.01522144522144522,
+        "text": "A Night at the Opera — Album von Queen (1975), 2 Titel"
+      },
+      {
+        "context": "Psalm 23",
+        "id": "knowledge-media-media-jsonl-gz#abk:0001:ch:23",
+        "locator": null,
+        "meta": {
+          "book": "Psalmen",
+          "chapter": 23,
+          "chapter_title": "Der HERR ist mein Hirte",
+          "collection": "bible-audio",
+          "duration_ms": 187422,
+          "entry": "Psalm 23",
+          "file": "bible-audio/Psalmen/023 - Der HERR ist mein Hirte.mp3",
+          "format": "mp3",
+          "kind": "entries",
+          "kind_media": "chapter",
+          "narrator": "Martin Weber",
+          "slug": "abk:0001:ch:23",
+          "source": "knowledge/media/media.jsonl.gz",
+          "text": "Psalm 23 — Der HERR ist mein Hirte (Psalmen: Kapitel 23)"
+        },
+        "quote": "Psalm 23 — Der HERR ist mein Hirte (Psalmen: Kapitel 23)",
+        "score": 0.0109375,
+        "text": "Psalm 23 — Der HERR ist mein Hirte (Psalmen: Kapitel 23)"
+      },
+      {
+        "context": "Psalmen",
+        "id": "knowledge-media-media-jsonl-gz#abk:0001",
+        "locator": null,
+        "meta": {
+          "author": "Lutherbibel 2017",
+          "book": "Psalmen",
+          "chapters": 2,
+          "collection": "bible-audio",
+          "entry": "Psalmen",
+          "kind": "entries",
+          "kind_media": "audiobook",
+          "narrator": "Martin Weber",
+          "slug": "abk:0001",
+          "source": "knowledge/media/media.jsonl.gz",
+          "text": "Psalmen — Hörbuch, 2 Kapitel, gelesen von Martin Weber"
+        },
+        "quote": "Psalmen — Hörbuch, 2 Kapitel, gelesen von Martin Weber",
+        "score": 0.01044776119402985,
+        "text": "Psalmen — Hörbuch, 2 Kapitel, gelesen von Martin Weber"
+      },
+      {
+        "context": "Psalm 1",
+        "id": "knowledge-media-media-jsonl-gz#abk:0001:ch:01",
+        "locator": null,
+        "meta": {
+          "book": "Psalmen",
+          "chapter": 1,
+          "chapter_title": "Der glückselbige Mensch",
+          "collection": "bible-audio",
+          "duration_ms": 241830,
+          "entry": "Psalm 1",
+          "file": "bible-audio/Psalmen/001 - Der glückselbige Mensch.mp3",
+          "format": "mp3",
+          "kind": "entries",
+          "kind_media": "chapter",
+          "narrator": "Martin Weber",
+          "slug": "abk:0001:ch:01",
+          "source": "knowledge/media/media.jsonl.gz",
+          "text": "Psalm 1 — Der glückselbige Mensch (Psalmen: Kapitel 1)"
+        },
+        "quote": "Psalm 1 — Der glückselbige Mensch (Psalmen: Kapitel 1)",
+        "score": 0.010294117647058823,
+        "text": "Psalm 1 — Der glückselbige Mensch (Psalmen: Kapitel 1)"
+      }
+    ]
+  },
+  "find_sermons": {
+    "results": [
+      {
+        "context": "knowledge/sermons/grace-upon-grace.md > Grace Upon Grace > Point 2 — Receiving, not earning",
+        "id": "knowledge-sermons-grace-upon-grace-md#3",
+        "locator": {
+          "end_line": 30,
+          "file": "knowledge/sermons/grace-upon-grace.md",
+          "start_line": 26
+        },
+        "meta": {
+          "chars": 328,
+          "file": "knowledge/sermons/grace-upon-grace.md",
+          "kind": "docs",
+          "source": "knowledge/sermons",
+          "source_label": "sermons"
+        },
+        "quote": "\n\"Have all received\" — the aorist of the verb: they took what was offered.\nNothing in the verse says they qualified. The Greek is the same word the\ntax collector used when he collected the toll: he received the coin that was\nlaid in his hand. The order of the hands is the order of grace: the open ha…",
+        "score": 0.011475409836065572,
+        "text": "\n\"Have all received\" — the aorist of the verb: they took what was offered.\nNothing in the verse says they qualified. The Greek is the same word the\ntax collector used when he collected the toll: he received the coin that was\nlaid in his hand. The order of the hands is the order of grace: the open hand\nfirst, the coin second."
+      },
+      {
+        "context": "knowledge/sermons/grace-upon-grace.md > Grace Upon Grace > Point 1 — The law brings a syllable, the grace a word",
+        "id": "knowledge-sermons-grace-upon-grace-md#2",
+        "locator": {
+          "end_line": 22,
+          "file": "knowledge/sermons/grace-upon-grace.md",
+          "start_line": 18
+        },
+        "meta": {
+          "chars": 348,
+          "file": "knowledge/sermons/grace-upon-grace.md",
+          "kind": "docs",
+          "source": "knowledge/sermons",
+          "source_label": "sermons"
+        },
+        "quote": "\nMoses gave the law by hand; what came through Jesus Christ is grace and truth.\nThe law is a syllable — necessary, sharp, pointing. The word is the whole\nsentence: context, intention, end. Law without grace is a syllable repeated\nuntil it becomes noise. Grace without law is a word without grammar — …",
+        "score": 0.01129032258064516,
+        "text": "\nMoses gave the law by hand; what came through Jesus Christ is grace and truth.\nThe law is a syllable — necessary, sharp, pointing. The word is the whole\nsentence: context, intention, end. Law without grace is a syllable repeated\nuntil it becomes noise. Grace without law is a word without grammar — sweet\nand unformed. The fullness holds both."
+      },
+      {
+        "context": "knowledge/sermons/grace-upon-grace.md > Grace Upon Grace > Point 3 — Upon: the pile, not the patch",
+        "id": "knowledge-sermons-grace-upon-grace-md#4",
+        "locator": {
+          "end_line": 38,
+          "file": "knowledge/sermons/grace-upon-grace.md",
+          "start_line": 34
+        },
+        "meta": {
+          "chars": 372,
+          "file": "knowledge/sermons/grace-upon-grace.md",
+          "kind": "docs",
+          "source": "knowledge/sermons",
+          "source_label": "sermons"
+        },
+        "quote": "\nThe preposition says \"upon\" — not a patch over the torn garment, but a layer\non a layer. Each grace does not cancel the last; it stands on it. The man who\nwas forgiven and forgave again: the second forgiveness is the first grace\nreceiving its own shape. That is why grace accumulates where the law c…",
+        "score": 0.01111111111111111,
+        "text": "\nThe preposition says \"upon\" — not a patch over the torn garment, but a layer\non a layer. Each grace does not cancel the last; it stands on it. The man who\nwas forgiven and forgave again: the second forgiveness is the first grace\nreceiving its own shape. That is why grace accumulates where the law cannot:\nthe law is a line you fall from; grace is a floor you build on."
+      },
+      {
+        "context": "knowledge/sermons/grace-upon-grace.md > Grace Upon Grace > Application",
+        "id": "knowledge-sermons-grace-upon-grace-md#5",
+        "locator": {
+          "end_line": 47,
+          "file": "knowledge/sermons/grace-upon-grace.md",
+          "start_line": 42
+        },
+        "meta": {
+          "chars": 337,
+          "file": "knowledge/sermons/grace-upon-grace.md",
+          "kind": "docs",
+          "source": "knowledge/sermons",
+          "source_label": "sermons"
+        },
+        "quote": "\nSomewhere in this week you have already received one grace you have not\nthanked. Find it tonight. Name it out loud. The naming is not the payment —\nthe payment is still not yours. The naming is where the \"upon\" begins.\n\n*Prayer: Lord, we have seen the glory — the quiet kind, the kind that stays.\nKe…",
+        "score": 0.0109375,
+        "text": "\nSomewhere in this week you have already received one grace you have not\nthanked. Find it tonight. Name it out loud. The naming is not the payment —\nthe payment is still not yours. The naming is where the \"upon\" begins.\n\n*Prayer: Lord, we have seen the glory — the quiet kind, the kind that stays.\nKeep giving us the fullness. Amen.*"
+      }
+    ]
+  },
+  "merge": {
+    "context": "MEDIA CATALOG (retrieved):\nQueen — Künstler, Sammlung rock, 2 Alben, 3 Titel [art:queen]\nNews of the World — Album von Queen (1977), 1 Titel [alb:queen-news]\nHeroes — Album von David Bowie (1977), 1 Titel [alb:bowie-heroes]\nDavid Bowie — Künstler, Sammlung rock, 2 Alben, 2 Titel [art:bowie]\nA Night at the Opera — Album von Queen (1975), 2 Titel [alb:queen-night]\nPsalm 23 — Der HERR ist mein Hirte (Psalmen: Kapitel 23) [abk:0001:ch:23]\nPsalmen — Hörbuch, 2 Kapitel, gelesen von Martin Weber [abk:0001]\nPsalm 1 — Der glückselbige Mensch (Psalmen: Kapitel 1) [abk:0001:ch:01]\n\nSERMON SCRIPTS (retrieved text):\n\n\"Have all received\" — the aorist of the verb: they took what was offered.\nNothing in the verse says they qualified. The Greek is the same word the\ntax collector used when he collected the toll: he received the coin that was\nlaid in his hand. The order of the hands is the order of grace: the open hand\nfirst, the coin second. | \nMoses gave the law by hand; what came through Jesus Christ is grace and truth.\nThe law is a syllable — necessary, sharp, pointing. The word is the whole\nsentence: context, intention, end. Law without grace is a syllable repeated\nuntil it becomes noise. Grace without law is a word without grammar — sweet\nand unformed. The fullness holds both. | \nThe preposition says \"upon\" — not a patch over the torn garment, but a layer\non a layer. Each grace does not cancel the last; it stands on it. The man who\nwas forgiven and forgave again: the second forgiveness is the first grace\nreceiving its own shape. That is why grace accumulates where the law cannot:\nthe law is a line you fall from; grace is a floor you build on. | \nSomewhere in this week you have already received one grace you have not\nthanked. Find it tonight. Name it out loud. The naming is not the payment —\nthe payment is still not yours. The naming is where the \"upon\" begins.\n\n*Prayer: Lord, we have seen the glory — the quiet kind, the kind that stays.\nKeep giving us the fullness. Amen.*"
+  },
+  "speak": {
+    "output": "e2e-answer: I heard you, and here is what I found for you."
+  },
+  "start_1": {
+    "device": "e2e-echo",
+    "utterance": "welche alben habe ich"
+  }
+}

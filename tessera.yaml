@@ -284,6 +284,27 @@ parts:
               body: '{"utterance": "what is playing on my heart right now?", "device": "e2e-echo"}'
               assert_status: 200
               assert_contains: "e2e-answer"
+            # List-type voice question: the mapper classify node rewrites it
+            # to structural record words BEFORE the search (no stemming in
+            # BM25). The LLM answer is cassette-replayed; the node-level pin
+            # below is what proves the mapper actually ran.
+            - name: ask_workflow_list_question
+              method: POST
+              path: "/api/workflows/ask/run"
+              service_account: adapter
+              body: '{"utterance": "welche alben habe ich", "device": "e2e-echo"}'
+              assert_status: 200
+              assert_contains: "e2e-answer"
+            # Z5 trace-fixture pin: the per-node outputs of the SAME ask run.
+            # Catches a code/mapper node whose body the render dropped
+            # (empty run_js → null output → empty context → the LLM then
+            # answers from nothing while the cassette replay still passes —
+            # the exact failure that shipped in 310d24d/ebbff52).
+            - name: ask_workflow_list_question_trace
+              workflow: ask
+              service_account: adapter
+              input: '{"utterance": "welche alben habe ich", "device": "e2e-echo"}'
+              fixture: knowledge/fixtures/ask-list-question.json
             # — the brain: ask-bible (agent mode; the MCP tool is
             #   unconfigured in e2e, so the agent's ONE tool round returns a
             #   typed error and the capped agent still ends with the
@@ -352,27 +373,31 @@ workflows:
       # conversational utterance only scores on vector noise. A code node
       # rewrites such questions to structural keywords + the utterance;
       # content questions pass through unchanged.
-      - type: code
+      # mapper (not code): a mapper's return value IS the node output
+      # (flat payload → {{search_query}} interpolates); a code node wraps
+      # its return in {output: …}, which interpolation never sees.
+      - type: mapper
         id: classify
-        code: |
-          const u = String(start_1.utterance || "");
-          // Structural words that occur in the scan-generated record TEXTS
-          // (scan.rs build_records) — the BM25 leg has no stemming, so the
-          // query must use the record's own words.
-          const LIST = [
-            ["alben|albums", "Album Titel"],
-            ["sammlungen|collections|bibliothek", "Sammlung"],
-            ["k\u00fcnstler|kuenstler|artist|artists", "K\u00fcnstler"],
-            ["titel|lieder|songs|tracks", "Titel Album"],
-            ["h\u00f6rbuch|horbuch|audiobook", "H\u00f6rbuch Kapitel"],
-            ["predigt|sermon", "Predigtaufnahme"],
-            ["radio|station", "Internetradio-Station"],
-          ];
-          let q = u;
-          for (const [pat, kw] of LIST) {
-            if (new RegExp(pat, "i").test(u)) { q = kw + " " + u; break; }
-          }
-          return { search_query: q };
+        props:
+          code: |
+            const u = String(start_1.utterance || "");
+            // Structural words that occur in the scan-generated record TEXTS
+            // (scan.rs build_records) — the BM25 leg has no stemming, so the
+            // query must use the record's own words.
+            const LIST = [
+              ["alben|albums", "Album Titel"],
+              ["sammlungen|collections|bibliothek", "Sammlung"],
+              ["k\u00fcnstler|kuenstler|artist|artists", "K\u00fcnstler"],
+              ["titel|lieder|songs|tracks", "Titel Album"],
+              ["h\u00f6rbuch|horbuch|audiobook", "H\u00f6rbuch Kapitel"],
+              ["predigt|sermon", "Predigtaufnahme"],
+              ["radio|station", "Internetradio-Station"],
+            ];
+            let q = u;
+            for (const [pat, kw] of LIST) {
+              if (new RegExp(pat, "i").test(u)) { q = kw + " " + u; break; }
+            }
+            return { search_query: q };
       - type: search
         id: find_media
         props:
@@ -389,23 +414,24 @@ workflows:
           top_k: 4
       - type: mapper
         id: merge
-        code: |
-          // The flat payload is first-writer-wins, so the two searches'
-          // `results` collide — this node reads the per-node outputs
-          // (globals) directly and builds one context string.
-          // The record's own retrieval text (r.text) carries the structural
-          // facts ("X — Künstler, Sammlung musik, 12 Alben, 55 Titel") —
-          // build the context from it, not from picked meta fields.
-          const fmt = (r) => (r.text || r.id || "") + " [" + ((r.meta || {}).slug || "") + "]";
-          const media = (find_media.results || []).map(fmt).join("\n");
-          const sermons = (find_sermons.results || [])
-            .map((r) => r.text || r.id || "").join(" | ");
-          return {
-            context:
-              (media ? "MEDIA CATALOG (retrieved):\n" + media : "") +
-              (sermons ? "\n\nSERMON SCRIPTS (retrieved text):\n" + sermons : "") ||
-              "(nothing retrieved — the collections may be empty)",
-          };
+        props:
+          code: |
+            // The flat payload is first-writer-wins, so the two searches'
+            // `results` collide — this node reads the per-node outputs
+            // (globals) directly and builds one context string.
+            // The record's own retrieval text (r.text) carries the structural
+            // facts ("X — Künstler, Sammlung musik, 12 Alben, 55 Titel") —
+            // build the context from it, not from picked meta fields.
+            const fmt = (r) => (r.text || r.id || "") + " [" + ((r.meta || {}).slug || "") + "]";
+            const media = (find_media.results || []).map(fmt).join("\n");
+            const sermons = (find_sermons.results || [])
+              .map((r) => r.text || r.id || "").join(" | ");
+            return {
+              context:
+                (media ? "MEDIA CATALOG (retrieved):\n" + media : "") +
+                (sermons ? "\n\nSERMON SCRIPTS (retrieved text):\n" + sermons : "") ||
+                "(nothing retrieved — the collections may be empty)",
+            };
       - type: llm
         id: speak
         props:

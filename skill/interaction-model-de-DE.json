@@ -1,0 +1,121 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "aria",
+      "intents": [
+        {
+          "name": "PlayMusicIntent",
+          "slots": [
+            { "name": "query", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "spiel {query}",
+            "spiele {query}",
+            "spiel mir {query}",
+            "spiele mir {query}",
+            "spiele den song {query}",
+            "spiel den song {query}",
+            "spiele das album {query}",
+            "spiel das album {query}",
+            "spiele musik von {query}",
+            "spiel musik von {query}",
+            "spiele {query} musik",
+            "mach {query} an",
+            "spiele den sender {query}",
+            "spiel den sender {query}",
+            "spiele radio {query}",
+            "spiel radio {query}",
+            "spiele station {query}",
+            "spiele die sendung {query}"
+          ]
+        },
+        {
+          "name": "AskIntent",
+          "slots": [
+            { "name": "utterance", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "frage {utterance}",
+            "frag {utterance}",
+            "frage den agenten {utterance}",
+            "sag dem agenten {utterance}",
+            "was hältst du von {utterance}",
+            "was meinst du zu {utterance}"
+          ]
+        },
+        {
+          "name": "ToggleShuffleIntent",
+          "samples": [
+            "shuffle",
+            "zufall",
+            "zufallsmodus",
+            "shuffle an",
+            "shuffle aus",
+            "zufall an",
+            "zufall aus",
+            "schalte shuffle an",
+            "schalte shuffle aus",
+            "misch die titel"
+          ]
+        },
+        {
+          "name": "RepeatOneIntent",
+          "samples": [
+            "wiederhole diesen song",
+            "wiederhole diesen titel",
+            "wiederhole das lied",
+            "wiederhole einmal"
+          ]
+        },
+        {
+          "name": "RepeatAllIntent",
+          "samples": [
+            "wiederhole alles",
+            "wiederhole die warteschlange",
+            "wiederhole die playlist",
+            "wiederhole alles durch"
+          ]
+        },
+        {
+          "name": "RepeatOffIntent",
+          "samples": [
+            "stoppe die wiederholung",
+            "wiederholung aus",
+            "schalte wiederholung aus",
+            "beende die wiederholung"
+          ]
+        },
+        {
+          "name": "SeekIntent",
+          "slots": [
+            { "name": "time", "type": "AMAZON.TIME" }
+          ],
+          "samples": [
+            "springe zu {time}",
+            "gehe zu {time}",
+            "spule zu {time}",
+            "springe vor zu {time}",
+            "spule vor zu {time}"
+          ]
+        },
+        { "name": "PlayIntent", "samples": [] },
+        { "name": "PauseIntent", "samples": [] },
+        { "name": "StopIntent", "samples": [] },
+        { "name": "NextIntent", "samples": [] },
+        { "name": "PreviousIntent", "samples": [] },
+        { "name": "ResumeIntent", "samples": [] },
+        { "name": "PlaybackStartedRequest", "samples": [] },
+        { "name": "PlaybackStoppedRequest", "samples": [] },
+        { "name": "PlaybackNearlyFinishedRequest", "samples": [] },
+        { "name": "PlaybackFailedRequest", "samples": [] },
+        { "name": "PlaybackFinishedRequest", "samples": [] },
+        { "name": "AMAZON.HelpIntent" },
+        { "name": "AMAZON.CancelIntent" },
+        { "name": "AMAZON.StopIntent" },
+        { "name": "AMAZON.NextIntent" },
+        { "name": "AMAZON.PreviousIntent" },
+        { "name": "AMAZON.FallbackIntent" }
+      ]
+    }
+  }
+}

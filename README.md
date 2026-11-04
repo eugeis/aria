@@ -191,11 +191,17 @@ caveat above). One-time console setup at [developer.amazon.com](https://develope
    `https://aria.eisler-systems.de/alexa` (must be a valid public TLS
    endpoint — the cert-manager cert makes that true). The console POSTs a
    test envelope there on save; it answers 200.
-3. **Interaction model**: import `skill/interaction-model.json`
-   (invocation name `aria`; PlayMusicIntent + AskIntent + the playback
-   controllers + notifiers + Fallback).
-4. **Manifest**: publish under en-US with the summary/description from
-   `skill/skill-manifest.json`. The skill icons are already hosted —
+3. **Interaction model**: the skill supports two locales — en-US
+   (`skill/interaction-model.json`) and de-DE
+   (`skill/interaction-model-de-DE.json`). In the console select the
+   locale, open the **JSON editor** tab, and paste the matching file
+   (invocation name `aria`; PlayMusicIntent + AskIntent + shuffle/repeat/
+   seek + the playback controllers + notifiers + Fallback). If your Echo is
+   set to German, the **de-DE** locale is the one that matters — an
+   en-US-only skill will not match on a German device.
+4. **Manifest / publishing info**: under each locale set name *Aria* and
+   the summary/description from `skill/skill-manifest.json` (both en-US and
+   de-DE are written out there). The skill icons are already hosted —
    `https://aria.eisler-systems.de/skill-icons/icon-108.png` and
    `…/icon-512.png` (served by the adapter; baked into its binary). The
    manifest's `smallIconUri` / `largeIconUri` point at them.
