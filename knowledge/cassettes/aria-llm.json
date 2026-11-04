@@ -55,7 +55,7 @@
         }
       }
     },
-    "55aa9c6247673954": {
+    "1a00b655937d1a19": {
       "request": {
         "messages": [
           {
@@ -113,7 +113,7 @@
               "parameters": {
                 "properties": {
                   "book": {
-                    "description": "Book number (1=Genesis .. 66=Revelation) or OSIS code (Exod, Psal, John).",
+                    "description": "The book number AS A JSON STRING (\"1\"=Genesis .. \"66\"=Revelation) or an OSIS code (\"Exod\", \"Psal\", \"John\"). Never send a bare number — the Bible app rejects integers.",
                     "type": "string"
                   },
                   "chapter": {
