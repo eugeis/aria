@@ -48,7 +48,12 @@ pub async fn handle_alexa(
             (StatusCode::OK, axum::Json(resp.to_json())).into_response()
         }
         Err(e) => {
-            tracing::debug!(%e, headers = ?headers.get(header::USER_AGENT), "unparseable /alexa request");
+            // WARN + a body snippet: an unparseable envelope is answered
+            // with an empty response, which the Echo renders as SILENCE —
+            // without this log the failure is invisible (that is exactly
+            // how the slot-`values` shape bug hid for days).
+            let body_head: String = String::from_utf8_lossy(&bytes[..bytes.len().min(400)]).into_owned();
+            tracing::warn!(%e, body = %body_head, "unparseable /alexa request — answering empty");
             (
                 StatusCode::OK,
                 axum::Json(aria_alexa::Response::empty().to_json()),

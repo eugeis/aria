@@ -294,6 +294,78 @@ mod tests {
     }
 
     #[test]
+    fn device_envelope_with_object_slot_values_parses() {
+        // The REAL device shape (verified failure 2026-11-04: silence on
+        // the Echo): built-in slots carry `values` as an ARRAY OF OBJECTS
+        // plus `resolutionStatus`, and the transcript in `request.utterance`.
+        // A `Vec<String>` for `values` rejected the whole envelope.
+        let json = r#"{
+          "version": "1.0",
+          "session": {
+            "new": true,
+            "sessionId": "amzn1.echo-api.session.x",
+            "application": { "applicationId": "amzn1.ask.skill.test" },
+            "user": { "userId": "amzn1.account.x" },
+            "attributes": {}
+          },
+          "context": {
+            "AudioPlayer": { "playerActivity": "IDLE" },
+            "System": {
+              "device": { "deviceId": "dvt-ECHO-X", "supportedInterfaces": { "AudioPlayer": {} } },
+              "application": { "applicationId": "amzn1.ask.skill.test" },
+              "user": { "userId": "amzn1.account.x" },
+              "apiAccessToken": "opaque"
+            }
+          },
+          "request": {
+            "type": "IntentRequest",
+            "requestId": "r-device",
+            "timestamp": "2026-11-04T23:30:00Z",
+            "locale": "de-DE",
+            "dialogState": "COMPLETED",
+            "intent": {
+              "name": "AskIntent",
+              "confirmationStatus": "NONE",
+              "slots": {
+                "utterance": {
+                  "name": "utterance",
+                  "value": "johannes drei sechzehn",
+                  "values": [
+                    { "value": "johannes drei sechzehn", "confidence": "HIGH" }
+                  ],
+                  "resolutionStatus": {
+                    "status": "SUCCESS",
+                    "value": { "id": "amzn1.response.search-query.slot-value.1" }
+                  },
+                  "confirmationStatus": "ACCEPTED"
+                }
+              }
+            },
+            "utterance": "lies mir johannes drei sechzehn vor"
+          }
+        }"#;
+        let env = envelope(json);
+        assert_eq!(
+            IntentKind::from_envelope(&env),
+            IntentKind::Ask {
+                utterance: "johannes drei sechzehn".into()
+            }
+        );
+        assert_eq!(env.device_id(), Some("dvt-ECHO-X"));
+    }
+
+    #[test]
+    fn slot_values_both_shapes() {
+        let strings = r#"{"version":"1.0","session":null,"context":null,"request":{"type":"IntentRequest","requestId":"r","intent":{"name":"SeekIntent","slots":{"time":{"name":"time","value":"2:30","values":["2:30"]}}}}}"#;
+        let env = envelope(strings);
+        assert_eq!(env.slot_values("time"), vec!["2:30".to_string()]);
+
+        let objects = r#"{"version":"1.0","session":null,"context":null,"request":{"type":"IntentRequest","requestId":"r","intent":{"name":"SeekIntent","slots":{"time":{"name":"time","value":"2:30","values":[{"value":"2:30","confidence":"HIGH"}]}}}}}"#;
+        let env = envelope(objects);
+        assert_eq!(env.slot_values("time"), vec!["2:30".to_string()]);
+    }
+
+    #[test]
     fn parse_time_variants() {
         assert_eq!(parse_time_slot("PT2M30S"), Some(150_000));
         assert_eq!(parse_time_slot("PT30S"), Some(30_000));

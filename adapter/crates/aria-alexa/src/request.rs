@@ -142,8 +142,13 @@ pub struct Slot {
     pub name: Option<String>,
     #[serde(default)]
     pub value: Option<String>,
+    /// Tolerant on purpose: ASK sends EITHER `["a", "b"]` OR
+    /// `[{"value": "a", "confidence": "HIGH"}, …]` (with resolution
+    /// status) depending on slot type and device — a `Vec<String>` here
+    /// rejected real device envelopes (silence on the Echo, verified
+    /// 2026-11-04).
     #[serde(default)]
-    pub values: Option<Vec<String>>,
+    pub values: Option<Value>,
     /// ASK sends an object here: `{"status":"SUCCESS","value":{...}}`.
     #[serde(default, rename = "resolutionStatus")]
     pub resolution_status: Option<Value>,
@@ -191,14 +196,30 @@ impl Envelope {
             .filter(|v| !v.trim().is_empty())
     }
 
-    /// All values of a multi-value slot.
+    /// All values of a multi-value slot — tolerating both shapes ASK
+    /// sends: `["a", "b"]` and `[{"value": "a", …}, …]`.
     pub fn slot_values(&self, name: &str) -> Vec<String> {
-        self.request
+        let Some(vals) = self
+            .request
             .intent
             .as_ref()
             .and_then(|i| i.slots.get(name))
             .and_then(|s| s.values.clone())
-            .unwrap_or_default()
+        else {
+            return Vec::new();
+        };
+        match vals {
+            Value::Array(items) => items
+                .into_iter()
+                .filter_map(|it| match it {
+                    Value::String(s) => Some(s),
+                    Value::Object(o) => o.get("value")?.as_str().map(str::to_string),
+                    _ => None,
+                })
+                .collect(),
+            Value::String(s) => vec![s],
+            _ => Vec::new(),
+        }
     }
 
     pub fn intent_name(&self) -> Option<&str> {
