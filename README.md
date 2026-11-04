@@ -208,14 +208,18 @@ caveat above). One-time console setup at [developer.amazon.com](https://develope
    manifest's `smallIconUri` / `largeIconUri` point at them.
 5. **Enable the `AUDIO_PLAYER` interface** (Endpoint configuration →
    Interfaces). Required for `AudioPlayer.Play` + the playback notifiers.
-6. **Pin the skill's Client ID** (so other skills can't hit the endpoint):
-   copy the **Client ID** (`amzn1.ask.skill.…`, shown under Endpoint
-   configuration) into the adapter's env —
-   `kubectl -n aria set env deploy/aria -c aria-ask ARIA_CLIENT_ID=amzn1.ask.skill.…`
-   (a `set env` triggers a rolling restart; the request check then rejects
-   any skill with a different application id with an empty response).
-   Leave it unset while you are still iterating — an empty value means the
-   check is off.
+ 6. **Pin the skill's Client ID** (so other skills can't hit the endpoint):
+    copy the **Client ID** (`amzn1.ask.skill.…`, shown under Endpoint
+    configuration) into `/home/ee/.ssh/aria-client-id` on the li7 runner
+    (mode 600) and create the secret —
+    `kubectl -n aria create secret generic moaic-aria-client-id \
+       --from-literal=ARIA_CLIENT_ID=amzn1.ask.skill.… --dry-run=client -o yaml \
+       | kubectl apply -n aria -f -`
+    — then roll the pod (`kubectl -n aria delete pod -l app.kubernetes.io/name=aria`).
+    The sidecar's `ARIA_CLIENT_ID` is an `optional` `secretKeyRef`: no
+    secret = the check is off (fail-soft), secret present = any envelope
+    from a different skill is rejected with an empty response. (Do NOT use
+    `kubectl set env` for this — helm upgrades revert inline env values.)
 7. **Test**: stay in the skill's **Development** stage — no certification
    needed for a personal skill; it works on your own account's Echo devices
    immediately. (Publishing to Production is optional and only makes sense

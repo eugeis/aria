@@ -13,19 +13,20 @@ the workflow strips it).
 | `/home/ee/.ssh/aria-adapter-token` | `MOAIC_ADAPTER_TOKEN` → `moaic-adapter-token` | the `adapter` service account (the ASK sidecar's credential — it rides on the same secret as `ARIA_BRAIN_TOKEN` in the sidecar) |
 | `/home/ee/.ssh/openrouter` | `MOAIC_CHAT_API_KEY` → `moaic-chat-api-key` | the OpenRouter key for the voice brain — house policy: ALL mosaic apps run their operations on OpenRouter (the in-house vLLM box is dev/data-prep only). This is the SAME file the pages app uses; the deploy workflow points at it directly. |
 | `/home/ee/.ssh/bible-reader-token` | `MOAIC_MCP_BIBLE_AUTH` → `moaic-mcp-bible-auth` | the bible app's `reader` service-account token — the bearer the brain's MCP client presents to `https://bible.eisler-systems.de/mcp` (share it from bible's `MOAIC_READER_TOKEN` secret) |
+| `/home/ee/.ssh/aria-client-id` | `ARIA_CLIENT_ID` → `moaic-aria-client-id` | the Alexa skill's Client ID (console → Endpoint configuration) — the `/alexa` request check only accepts envelopes from this skill. `secretKeyRef` is `optional: true`: no file/secret = check off (fail-soft, the pod never crashes on it) |
 
 Missing files do not fail the deploy — the matching surface fails soft
 (workflow LLM answers, the bible MCP tools, or auth) until the secret exists.
 
-**Alexa skill Client ID** (not a runner file — it is skill-configuration,
-pinned once on the live deployment, 2026-11): `ARIA_CLIENT_ID` on the
-`aria-ask` sidecar, set via
-`kubectl -n aria set env deploy/aria -c aria-ask ARIA_CLIENT_ID=amzn1.ask.skill.…`
-(value from the console's Endpoint configuration; never committed). The
-injector declares the env with `value: ""` in the chart, so helm 3-way
-merges (old == new == "") PRESERVE the live value across upgrades. Empty =
-the request check is off; set = any envelope from a different skill is
-rejected with a 54-byte empty response (verified 2026-11-04).
+**Alexa skill Client ID** (`/home/ee/.ssh/aria-client-id`, 2026-11):
+rides the `moaic-aria-client-id` secret onto the sidecar's
+`ARIA_CLIENT_ID` (optional `secretKeyRef`). The earlier `kubectl set env`
+approach did NOT survive helm upgrades (the JSON merge patch replaces the
+whole env list and reverted the value) — the secret is the durable home.
+Value = the console's Client ID (`amzn1.ask.skill.…`, Endpoint
+configuration; never committed). Missing secret = check off (fail-soft);
+set = any envelope from a different skill is rejected with an empty
+response (verified 2026-11-04).
 
 ## Host directories (create before the first deploy)
 

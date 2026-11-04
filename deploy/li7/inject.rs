@@ -57,11 +57,17 @@ const SIDECAR: &str = r#"
                   # value the app validates as MOAIC_ADAPTER_TOKEN).
                   name: moaic-adapter-token
                   key: MOAIC_ADAPTER_TOKEN
-            # The Alexa skill client id (Endpoint configuration → Client ID).
-            # Empty = the check is off; set it once the skill is registered:
-            #   kubectl -n aria set env deploy/aria -c aria-ask ARIA_CLIENT_ID=amzn1.ask.skill.…
+            # The Alexa skill client id (Endpoint configuration → Client ID)
+            # rides the moaic-aria-client-id secret (created by the deploy
+            # workflow from /home/ee/.ssh/aria-client-id, house pattern).
+            # optional: missing secret = env absent = the check stays off
+            # (fail-soft until the skill is registered).
             - name: ARIA_CLIENT_ID
-              value: ""
+              valueFrom:
+                secretKeyRef:
+                  name: moaic-aria-client-id
+                  key: ARIA_CLIENT_ID
+                  optional: true
           readinessProbe:
             httpGet:
               path: /health
