@@ -81,8 +81,15 @@ async function playCurrent() {
   $("pp-artist").textContent = cur.artist || "";
   $("pp-play").textContent = "❚❚";
   try {
-    const r = await api("/dl/play", { method: "POST", body: JSON.stringify({ id: cur.id }) });
-    player.audio.src = r.url;
+    let url;
+    if (cur.path) {
+      // Offline entry: cache-first blob URL (works without a connection).
+      url = await MosaicOffline.url(cur.path);
+    } else {
+      const r = await api("/dl/play", { method: "POST", body: JSON.stringify({ id: cur.id }) });
+      url = r.url;
+    }
+    player.audio.src = url;
     await player.audio.play();
   } catch (e) {
     toast(`Abspielen fehlgeschlagen: ${e.message}`, true);
@@ -134,6 +141,150 @@ $("pp-close").addEventListener("click", () => {
   $("player").classList.add("hidden");
 });
 
+// ── offline (device cache, the mosaic offline.js helper) ────────────────
+
+let offlineList = JSON.parse(localStorage.getItem("aria-offline") || "[]");
+
+function fmtSize(bytes) {
+  if (bytes == null) return "–";
+  const mb = bytes / 1048576;
+  return mb >= 1 ? mb.toFixed(1) + " MB" : Math.max(1, Math.ceil(bytes / 1024)) + " KB";
+}
+
+function offlineBadge() {
+  const b = $("offline-count");
+  b.textContent = String(offlineList.length);
+  b.classList.toggle("hidden", offlineList.length === 0);
+}
+
+function persistOffline() {
+  localStorage.setItem("aria-offline", JSON.stringify(offlineList));
+  offlineBadge();
+}
+
+async function renderOffline() {
+  const box = $("offline-list");
+  offlineBadge();
+  if (!offlineList.length) {
+    $("offline-total").textContent = "";
+    box.innerHTML = `<p class="muted">Nichts gespeichert — in der Bibliothek per ⤓ wählen (Titel oder „Album offline“).</p>`;
+    return;
+  }
+  const total = offlineList.reduce((s, e) => s + (e.size || 0), 0);
+  $("offline-total").textContent = `${offlineList.length} Dateien · ${fmtSize(total)} auf diesem Gerät`;
+  box.innerHTML = offlineList
+    .map(
+      (e, i) => `
+    <div class="pl-row">
+      <span class="t-no"></span>
+      <span class="t-title" title="${esc(e.path)}">${esc(e.title || e.path)}</span>
+      <span class="t-meta muted">${e.artist ? esc(e.artist) + " · " : ""}${fmtSize(e.size)}${e.missing ? " · nicht mehr im Cache" : ""}</span>
+      <span class="t-actions">
+        ${e.missing ? "" : `<button class="act" data-off="play" data-i="${i}" title="Abspielen (offline)">▶</button>`}
+        <button class="act" data-off="re" data-i="${i}" title="Erneut herunterladen">⭳</button>
+        <button class="act danger" data-off="del" data-i="${i}" title="Entfernen">✕</button>
+      </span>
+    </div>`
+    )
+    .join("");
+}
+
+// Resolve the size of a catalog file (the download loop needs it).
+async function catalogSize(path) {
+  const c = await MosaicOffline.catalog();
+  const f = (c.files || []).find((x) => x.path === path);
+  return f ? f.size : null;
+}
+
+async function saveOffline(entry) {
+  if (offlineList.some((e) => e.path === entry.path)) return toast("Bereits gespeichert", true);
+  let size = null;
+  try {
+    size = await catalogSize(entry.path);
+  } catch (e) {
+    toast(`Katalog: ${e.message}`, true);
+    return;
+  }
+  if (size == null) return toast(`Datei nicht im Offline-Katalog: ${entry.path}`, true);
+  entry.size = size;
+  offlineList.push(entry);
+  persistOffline();
+  renderOffline();
+  try {
+    let last = 0;
+    await MosaicOffline.download(entry.path, size, (p) => {
+      if (p - last >= 0.2 || p >= 1) {
+        last = p;
+        toast(`Speichere „${entry.title}“ … ${Math.round(p * 100)}%`);
+      }
+    });
+    toast(`„${entry.title}“ ist offline verfügbar`);
+  } catch (e) {
+    offlineList = offlineList.filter((x) => x.path !== entry.path);
+    persistOffline();
+    renderOffline();
+    toast(`Speichern fehlgeschlagen: ${e.message}`, true);
+  }
+}
+
+async function saveOfflineAlbum(tracks) {
+  const todo = tracks.filter(
+    (t) => t.rel_path && !offlineList.some((e) => e.path === t.rel_path)
+  );
+  if (!todo.length) return toast("Album ist bereits komplett offline", true);
+  toast(`Speichere ${todo.length} Titel von „${tracks[0].album}“ offline …`);
+  let failed = 0;
+  for (const t of todo) {
+    try {
+      const size = await catalogSize(t.rel_path);
+      if (size == null) {
+        failed += 1;
+        continue;
+      }
+      offlineList.push({ path: t.rel_path, title: t.title, artist: t.artist, album: t.album, size });
+      persistOffline();
+      await MosaicOffline.download(t.rel_path, size, null);
+      renderOffline();
+    } catch {
+      offlineList = offlineList.filter((x) => x.path !== t.rel_path);
+      persistOffline();
+      failed += 1;
+    }
+  }
+  renderOffline();
+  toast(failed ? `Album offline: ${todo.length - failed}/${todo.length} (${failed} fehlgeschlagen)` : `Album „${tracks[0].album}“ ist offline verfügbar`, failed > 0);
+}
+
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-off]");
+  if (!b) return;
+  const i = Number(b.dataset.i);
+  const entry = offlineList[i];
+  if (!entry) return;
+  if (b.dataset.off === "del") {
+    MosaicOffline.remove(entry.path).catch(() => {});
+    offlineList.splice(i, 1);
+    persistOffline();
+    renderOffline();
+  } else if (b.dataset.off === "re") {
+    offlineList = offlineList.filter((x) => x.path !== entry.path);
+    persistOffline();
+    renderOffline();
+    saveOffline(entry);
+  } else if (b.dataset.off === "play") {
+    const list = offlineList.map((x) => ({ path: x.path, title: x.title || x.path, artist: x.artist || "" }));
+    const idx = list.findIndex((x) => x.path === entry.path);
+    playContext(list, Math.max(0, idx));
+  }
+});
+
+$("offline-verify").addEventListener("click", async () => {
+  for (const e of offlineList) e.missing = !(await MosaicOffline.isCached(e.path));
+  renderOffline();
+  const n = offlineList.filter((e) => e.missing).length;
+  toast(n ? `${n} Dateien nicht (mehr) im Cache` : "Alles im Cache");
+});
+
 // ── auth ──────────────────────────────────────────────────────────────────
 
 async function boot() {
@@ -160,6 +311,7 @@ async function boot() {
   refreshCookiesBadge();
   refreshCookiesStatus();
   renderQueue(await api("/dl/queue").catch(() => ({ items: [] })));
+  renderOffline();
   startQueuePolling();
 }
 
@@ -196,6 +348,7 @@ document.querySelectorAll(".tabs button").forEach((b) =>
     b.classList.add("active");
     $(`tab-${b.dataset.tab}`).classList.add("active");
     if (b.dataset.tab === "queue") refreshQueueNow();
+    if (b.dataset.tab === "offline") renderOffline();
   })
 );
 
@@ -216,10 +369,13 @@ function trackRowHtml(t, opts = {}) {
   const dur = `<span class="t-dur">${fmtMs(t.duration_ms)}</span>`;
   const play = `<button class="act" data-act="play" data-id="${t.id}" title="Abspielen">▶</button>`;
   const pl = `<button class="act" data-act="pladd" data-id="${t.id}" title="Zur Playlist">＋</button>`;
+  const off = t.rel_path
+    ? `<button class="act" data-act="t-off" data-path="${esc(t.rel_path)}" data-title="${esc(t.title)}" data-artist="${esc(t.artist || "")}" title="Für offline speichern">⤓</button>`
+    : "";
   return `<div class="t-row" data-track="${t.id}">
     ${no}<span class="t-title" title="${esc(t.title)}">${esc(t.title)}</span>
     <span class="t-meta muted">${esc(t.artist || "")}${t.album ? " · " + esc(t.album) : ""}</span>
-    ${dur}<span class="t-actions">${play}${pl}</span>
+    ${dur}<span class="t-actions">${play}${pl}${off}</span>
   </div>`;
 }
 
@@ -245,7 +401,8 @@ function renderBrowse() {
                 <summary>${esc(al.name)}${al.year ? ` <span class="muted">(${esc(al.year)})</span>` : ""} <span class="muted">(${al.tracks.length})</span></summary>
                 <div class="album-head"><span></span><span class="t-dur">Zeit</span><span class="t-actions"></span>
                   <span class="t-actions"><button class="act ghost" data-act="playall-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album abspielen">▶ Album</button>
-                  <button class="act ghost" data-act="pladd-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album zur Playlist">＋ Album</button></span>
+                  <button class="act ghost" data-act="pladd-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album zur Playlist">＋ Album</button>
+                  <button class="act ghost" data-act="off-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album für offline speichern">⤓ Album offline</button></span>
                 </div>
                 ${al.tracks.map((t) => trackRowHtml(t)).join("")}
               </details>`
@@ -267,6 +424,13 @@ document.addEventListener("click", async (e) => {
   else if (act === "pladd") addTrackToPlaylist(Number(b.dataset.id));
   else if (act === "playall-album") playAlbum(b.dataset.artist, b.dataset.album);
   else if (act === "pladd-album") addAlbumToPlaylist(b.dataset.artist, b.dataset.album);
+  else if (act === "t-off")
+    saveOffline({ path: b.dataset.path, title: b.dataset.title, artist: b.dataset.artist });
+  else if (act === "off-album") {
+    const tracks = albumTracks(b.dataset.artist, b.dataset.album);
+    if (!tracks.length) return;
+    saveOfflineAlbum(tracks);
+  }
   else if (act === "yt-dl") {
     const h = searchHits[Number(b.dataset.i)];
     queueYtItems([h], h.channel || $("yt-artist").value, $("yt-album").value || h.title);

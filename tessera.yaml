@@ -44,6 +44,21 @@ app:
   # SPA in ./web — the app lens serves it embedded at / (no Leptos, no wasm).
   # The /dl REST API stays in the adapter sidecar (same origin via ingress).
   hydration: vanilla
+  # Offline mode (smartphone PWA): the /media tree (read-only hostPath on
+  # li7 — see deploy/li7/inject.rs) is exposed as a ranged, resumable
+  # catalog at /api/offline/*; the web lens ships the offline.js helper
+  # (Cache Storage) the SPA uses for "für offline speichern".
+  offline:
+    enabled: true
+    media_root: /media
+  # Native apps (Tauri): out/native is a Tauri v2 shell whose window drives
+  # this very server (the static SPA + REST API) on loopback. Desktop
+  # targets fully wired; android/ios are documented scaffolds (in-process
+  # backend port is the follow-up).
+  native:
+    enabled: true
+    identifier: de.eisler.aria
+    targets: [macos, linux, windows]
   # L13: the web /chat assistant routes across the two collections by
   # intent; the voice workflows name their collection explicitly.
   assistant:

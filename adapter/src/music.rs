@@ -38,6 +38,9 @@ struct TrackView {
     #[serde(skip_serializing_if = "Option::is_none")]
     track_no: Option<u32>,
     duration_ms: u64,
+    /// Media-root-relative path (the offline catalog's key — the SPA
+    /// saves for offline by this path).
+    rel_path: String,
 }
 
 fn kind_str(k: CollectionKind) -> &'static str {
@@ -58,6 +61,11 @@ fn track_view(t: &aria_audio::Track) -> TrackView {
         kind: kind_str(t.kind).to_string(),
         track_no: t.track_no,
         duration_ms: t.duration_ms,
+        rel_path: t
+            .path
+            .strip_prefix("/media/")
+            .map(str::to_string)
+            .unwrap_or_else(|| t.path.rsplit('/').next().unwrap_or("").to_string()),
     }
 }
 

@@ -144,6 +144,12 @@ const BRAIN_MOUNTS_PRELUDE: &str = r"          volumeMounts:
               mountPath: /data
             - name: host-vector
               mountPath: /vector
+            # li7 (injected by inject.rs): the media tree, READ-ONLY — the
+            # offline surface (/api/offline/catalog + file) walks and serves
+            # it to devices (app.offline, media_root: /media).
+            - name: media
+              mountPath: /media
+              readOnly: true
 ";
 
 const STARTUP_PROBE_OLD: &str = "          readinessProbe:

@@ -39,6 +39,7 @@
   <button data-tab="search">Suche</button>
   <button data-tab="playlists">Playlists <span id="pl-count" class="count hidden">0</span></button>
   <button data-tab="queue">Downloads <span id="queue-count" class="count hidden">0</span></button>
+  <button data-tab="offline">Offline <span id="offline-count" class="count hidden">0</span></button>
   <button data-tab="cookies">YouTube-Login</button>
 </nav>
 
@@ -112,6 +113,20 @@
     </div>
   </section>
 
+  <!-- OFFLINE -->
+  <section id="tab-offline" class="tab">
+    <p class="muted">
+      Auf diesem Gerät gespeicherte Dateien (Cache Storage) — abspielbar auch ohne
+      Verbindung. In der Bibliothek per <b>⤓</b> speichern (Titel oder ganzes Album).
+    </p>
+    <div class="row">
+      <span id="offline-total" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="offline-verify" class="ghost">Status prüfen</button>
+    </div>
+    <div id="offline-list" class="pl-items"></div>
+  </section>
+
   <!-- COOKIES -->
   <section id="tab-cookies" class="tab">
     <h2>YouTube-Sitzung verbinden</h2>
@@ -153,6 +168,7 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
+<script src="/offline.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
