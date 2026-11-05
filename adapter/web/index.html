@@ -15,9 +15,10 @@
   <div class="login-card">
     <img src="/icon.svg" alt="" width="48" height="48">
     <h1>Aria</h1>
-    <p class="muted">Gib das Web-Token ein (vom li7-Server, Secret <code>moaic-aria-web-token</code>).</p>
+    <p class="muted">Anmeldung mit dem App-Benutzerkonto (wie die Bible-App).</p>
     <form id="login-form">
-      <input id="login-token" type="password" placeholder="Web-Token" autocomplete="current-password" required>
+      <input id="login-user" type="text" placeholder="Benutzername" autocomplete="username" required>
+      <input id="login-pass" type="password" placeholder="Passwort" autocomplete="current-password" required>
       <button type="submit">Anmelden</button>
     </form>
     <p id="login-error" class="error"></p>
@@ -27,7 +28,8 @@
 <header>
   <div class="brand"><img src="/icon.svg" alt="" width="28" height="28"> Aria <span>Downloads</span></div>
   <div class="status">
-    <span id="cookie-badge" class="badge muted">Sitzung: ?</span>
+    <span id="user-badge" class="badge muted" title="Angemeldet als"></span>
+    <span id="cookie-badge" class="badge muted">YT-Sitzung: ?</span>
     <button id="logout" class="ghost hidden">Abmelden</button>
   </div>
 </header>

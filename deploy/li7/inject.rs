@@ -77,6 +77,15 @@ const SIDECAR: &str = r#"
                   name: moaic-aria-web-token
                   key: ARIA_WEB_TOKEN
                   optional: true
+            # The brain's JWT signing secret — the web login verifies the
+            # brain's /api/auth/login tokens (HS256) locally, so one
+            # credential system covers voice + web (same as bible).
+            - name: MOAIC_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: moaic-jwt-secret
+                  key: MOAIC_JWT_SECRET
+                  optional: true
           readinessProbe:
             httpGet:
               path: /health

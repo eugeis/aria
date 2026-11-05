@@ -69,8 +69,45 @@ async fn handle_manifest() -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// auth
+// auth — the brain's identity (same as the bible app)
+//
+// The login happens against the BRAIN's `POST /api/auth/login`
+// (username/password → JWT, HS256 with MOAIC_JWT_SECRET — ADR 0012/0125
+// identity, one credential across all surfaces). This sidecar then VERRIFIES
+// that JWT locally (shared secret, no loopback call per request) and gates
+// /dl/* on it. Tokens the brain accepts, we accept:
+//   * the local HS256 JWT (username/password login)
+//   * an OIDC IdP id_token (RS256, ADR 0150) when the IdP is configured
+//     (MOAIC_OIDC_PUBLIC_KEY + ARIA_OIDC_ISSUER/ARIA_OIDC_CLIENT_ID)
+//   * the legacy single ARIA_WEB_TOKEN (dev fallback only)
 // ---------------------------------------------------------------------------
+
+const JWT_SECRET_ENV: &str = "MOAIC_JWT_SECRET";
+const OIDC_PEM_ENV: &str = "MOAIC_OIDC_PUBLIC_KEY";
+const OIDC_ISSUER_ENV: &str = "ARIA_OIDC_ISSUER";
+const OIDC_CLIENT_ID_ENV: &str = "ARIA_OIDC_CLIENT_ID";
+/// The identity cookie: the brain reads the same name (mosaic_token), so one
+/// login covers both surfaces (the bible app does the same).
+const ID_COOKIE: &str = "mosaic_token";
+
+#[derive(Serialize, Clone)]
+struct WebUser {
+    sub: String,
+    role: String,
+    name: Option<String>,
+    provider: Option<String>,
+}
+
+impl WebUser {
+    fn json(&self) -> Value {
+        serde_json::json!({
+            "user": self.sub,
+            "role": self.role,
+            "name": self.name,
+            "provider": self.provider,
+        })
+    }
+}
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
@@ -82,21 +119,132 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .next()
 }
 
-fn authorized(cfg: &Config, headers: &HeaderMap) -> bool {
-    match cfg.server.web_token.as_deref() {
-        None => true,
-        Some(want) => cookie_value(headers, COOKIE_NAME).as_deref() == Some(want),
+/// The presented credential: identity cookie (mosaic_token, or the legacy
+/// ariadltoken), else the Authorization bearer.
+fn presented_token(headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, ID_COOKIE)
+        .or_else(|| cookie_value(headers, COOKIE_NAME))
+        .or_else(|| {
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+        })
+}
+
+/// Verify a presented credential. None = not authenticated.
+fn verify_web_token(tok: &str, legacy_token: Option<&str>) -> Option<WebUser> {
+    let t = tok.trim();
+    // Legacy single token (dev fallback: only when no JWT secret is set).
+    if legacy_token.is_some_and(|w| !w.is_empty() && t == w)
+        && std::env::var(JWT_SECRET_ENV).map(|s| s.is_empty()).unwrap_or(true)
+    {
+        return Some(WebUser {
+            sub: "token".into(),
+            role: "admin".into(),
+            name: None,
+            provider: Some("token".into()),
+        });
     }
+    // Local brain JWT (HS256, shared secret).
+    if let Some(secret) = std::env::var(JWT_SECRET_ENV).ok().filter(|s| !s.is_empty()) {
+        use jsonwebtoken::{DecodingKey, Validation};
+        let mut v = Validation::new(jsonwebtoken::Algorithm::HS256);
+        v.set_issuer(&["mosaic"]);
+        v.validate_exp = true;
+        if let Ok(d) =
+            jsonwebtoken::decode::<Value>(t, &DecodingKey::from_secret(secret.as_bytes()), &v)
+        {
+            let sub = d.claims.get("sub")?.as_str()?.to_string();
+            return Some(WebUser {
+                role: d
+                    .claims
+                    .get("role")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("user")
+                    .to_string(),
+                name: d.claims.get("name").and_then(|n| n.as_str()).map(String::from),
+                provider: d
+                    .claims
+                    .get("provider")
+                    .and_then(|p| p.as_str())
+                    .map(String::from),
+                sub,
+            });
+        }
+    }
+    // OIDC IdP id_token (RS256) — the SSO path (ADR 0150).
+    if let (Ok(pem), Ok(issuer)) = (
+        std::env::var(OIDC_PEM_ENV),
+        std::env::var(OIDC_ISSUER_ENV),
+    ) {
+        if !pem.is_empty() && !issuer.is_empty() {
+            use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+            if let Ok(key) = DecodingKey::from_rsa_pem(pem.as_bytes()) {
+                let mut v = Validation::new(Algorithm::RS256);
+                v.set_issuer(&[issuer]);
+                if let Ok(client_id) = std::env::var(OIDC_CLIENT_ID_ENV) {
+                    if !client_id.is_empty() {
+                        v.set_audience(&[client_id]);
+                    }
+                }
+                if let Ok(d) = jsonwebtoken::decode::<Value>(t, &key, &v) {
+                    let sub = d.claims.get("sub")?.as_str()?.to_string();
+                    return Some(WebUser {
+                        role: d
+                            .claims
+                            .get("role")
+                            .and_then(|r| r.as_str())
+                            .unwrap_or("user")
+                            .to_string(),
+                        name: d.claims.get("name").and_then(|n| n.as_str()).map(String::from),
+                        provider: d
+                            .claims
+                            .get("provider")
+                            .and_then(|p| p.as_str())
+                            .map(String::from)
+                            .or_else(|| Some("oidc".into())),
+                        sub,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The authenticated caller, or None. (No-op open access only when no
+/// credential machinery is configured at all: no JWT secret, no web token,
+/// no OIDC — i.e. a bare dev run.)
+fn authorized(cfg: &Config, headers: &HeaderMap) -> Option<WebUser> {
+    let legacy = cfg.server.web_token.as_deref();
+    let any_auth_configured = std::env::var(JWT_SECRET_ENV)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+        || legacy.is_some_and(|s| !s.is_empty())
+        || std::env::var(OIDC_PEM_ENV).map(|s| !s.is_empty()).unwrap_or(false)
+            && std::env::var(OIDC_ISSUER_ENV).map(|s| !s.is_empty()).unwrap_or(false);
+    if !any_auth_configured {
+        return Some(WebUser {
+            sub: "anonymous".into(),
+            role: "admin".into(),
+            name: None,
+            provider: Some("dev-open".into()),
+        });
+    }
+    presented_token(headers).and_then(|t| verify_web_token(&t, legacy))
 }
 
 async fn handle_me(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Json<Value> {
-    Json(serde_json::json!({
-        "ok": authorized(&state.cfg, &headers),
-        "auth_required": state.cfg.server.web_token.is_some(),
-    }))
+    match authorized(&state.cfg, &headers) {
+        Some(u) => Json(serde_json::json!({ "ok": true, "user": u.json() })),
+        None => Json(serde_json::json!({ "ok": false, "auth_required": true })),
+    }
 }
 
 #[derive(Deserialize)]
@@ -104,35 +252,42 @@ struct LoginBody {
     token: String,
 }
 
+/// Exchange a verified brain JWT for the identity cookie. The SPA obtains
+/// the token from the BRAIN's /api/auth/login (username/password) — we only
+/// re-verify it, so there is exactly one credential system (the app's).
 async fn handle_login(
     State(state): State<Arc<AppState>>,
     Json(body): Json<LoginBody>,
 ) -> Response {
-    let want = match state.cfg.server.web_token.as_deref() {
-        None => return Json(serde_json::json!({"ok": true, "detail": "auth not configured"})).into_response(),
-        Some(w) => w.to_string(),
-    };
-    if body.token.trim() != want {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok": false}))).into_response();
+    match verify_web_token(body.token.trim(), state.cfg.server.web_token.as_deref()) {
+        Some(u) => {
+            let cookie = format!(
+                "{ID_COOKIE}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
+                body.token.trim(),
+                2 * 24 * 3600
+            );
+            tracing::info!(user = %u.sub, role = %u.role, "web login");
+            (
+                StatusCode::OK,
+                [(header::SET_COOKIE, cookie)],
+                Json(serde_json::json!({ "ok": true, "user": u.json() })),
+            )
+                .into_response()
+        }
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"ok": false, "error": "invalid or expired token"})),
+        )
+            .into_response(),
     }
-    let cookie = format!(
-        "{COOKIE_NAME}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
-        want,
-        30 * 24 * 3600
-    );
-    (
-        StatusCode::OK,
-        [(header::SET_COOKIE, cookie)],
-        Json(serde_json::json!({"ok": true})),
-    )
-        .into_response()
 }
 
 async fn handle_logout() -> Response {
-    let cookie = format!("{COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    let mut cookies = vec![format!("{ID_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")];
+    cookies.push(format!("{COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"));
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, cookie)],
+        [(header::SET_COOKIE, cookies[0].clone()), (header::SET_COOKIE, cookies[1].clone())],
         Json(serde_json::json!({"ok": true})),
     )
         .into_response()
@@ -395,7 +550,7 @@ async fn handle_search(
     headers: HeaderMap,
     Query(q): Query<SearchQuery>,
 ) -> Response {
-    if !authorized(&state.cfg, &headers) {
+    if authorized(&state.cfg, &headers).is_none() {
         return denied();
     }
     let query = q.q.trim().to_string();
@@ -433,7 +588,7 @@ async fn handle_playlist(
     headers: HeaderMap,
     Query(q): Query<PlaylistQuery>,
 ) -> Response {
-    if !authorized(&state.cfg, &headers) {
+    if authorized(&state.cfg, &headers).is_none() {
         return denied();
     }
     let url = q.url.trim();
@@ -679,7 +834,7 @@ async fn handle_queue_get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Response {
-    if !authorized(&state.cfg, &headers) {
+    if authorized(&state.cfg, &headers).is_none() {
         return denied();
     }
     let collections: Vec<String> = state.cfg.collections.items.iter().map(|i| i.name.clone()).collect();
@@ -696,7 +851,7 @@ async fn handle_queue_add(
     headers: HeaderMap,
     Json(body): Json<QueueAddBody>,
 ) -> Response {
-    if !authorized(&state.cfg, &headers) {
+    if authorized(&state.cfg, &headers).is_none() {
         return denied();
     }
     let known: Vec<String> = state.cfg.collections.items.iter().map(|i| i.name.clone()).collect();
@@ -764,7 +919,7 @@ fn queue_item_op(
     id: &str,
     op: &str,
 ) -> Response {
-    if !authorized(&state.cfg, headers) {
+    if authorized(&state.cfg, headers).is_none() {
         return denied();
     }
     let ok = match op {
@@ -803,7 +958,7 @@ async fn handle_queue_clear_done(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Response {
-    if !authorized(&state.cfg, &headers) {
+    if authorized(&state.cfg, &headers).is_none() {
         return denied();
     }
     let n = state.dl_queue.clear_finished();

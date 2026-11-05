@@ -46,17 +46,22 @@ function esc(s) {
 // ---------- auth ----------
 
 async function boot() {
+  let me;
   try {
-    const me = await api("/dl/me");
-    authed = me.ok;
+    me = await api("/dl/me");
   } catch {
-    authed = false;
+    me = { ok: false };
   }
-  if (!authed) {
+  if (!me.ok) {
     showLogin();
     return;
   }
-  $("logout").classList.toggle("hidden", !authed);
+  authed = true;
+  const u = me.user || {};
+  $("user-badge").textContent = u.name || u.user || "?";
+  $("user-badge").title = `Angemeldet als ${u.user} (${u.role || "?"})`;
+  $("user-badge").className = "badge ok";
+  $("logout").classList.remove("hidden");
   const q = await api("/dl/queue").catch(() => ({ items: [], collections: [] }));
   collections = q.collections || [];
   fillCollectionSelects();
@@ -67,16 +72,27 @@ async function boot() {
 
 function showLogin() {
   $("login").classList.remove("hidden");
-  $("login-token").focus();
+  $("login-user").focus();
 }
 
+// Login is the app's identity (the brain, same as the bible app):
+// username/password → the brain's /api/auth/login → JWT → we exchange it
+// for the identity cookie via /dl/login.
 $("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  $("login-error").textContent = "";
   try {
-    await api("/dl/login", { method: "POST", body: JSON.stringify({ token: $("login-token").value }) });
-    $("login-error").textContent = "";
+    const brain = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: $("login-user").value, password: $("login-pass").value }),
+    });
+    const bd = await brain.json().catch(() => ({}));
+    if (!brain.ok || !bd.token) {
+      throw new Error(bd.error || `Anmeldung fehlgeschlagen (HTTP ${brain.status})`);
+    }
+    await api("/dl/login", { method: "POST", body: JSON.stringify({ token: bd.token }) });
     $("login").classList.add("hidden");
-    authed = true;
     boot();
   } catch (err) {
     $("login-error").textContent = err.message;
