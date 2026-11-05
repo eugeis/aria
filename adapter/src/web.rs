@@ -1033,7 +1033,9 @@ async fn finalize(out_dir: &Path, track_prefix: &str, item: &DlItem) {
         ff.arg("-metadata").arg(format!("track={t}"));
     }
     ff.arg("-c").arg("copy");
-    let tmp = out_dir.join(format!(".{final_name}.tagged"));
+    // The tmp name must END in .mp3 — ffmpeg infers the output format from
+    // the extension (".tagged" → "unable to find a suitable output format").
+    let tmp = out_dir.join(format!(".tag-{final_name}"));
     ff.arg(&tmp);
     let ok = ff.status().await.map(|s| s.success()).unwrap_or(false);
     if ok {
