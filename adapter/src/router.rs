@@ -16,9 +16,17 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
     tracing::debug!(device = %device, ?kind, "alexa request");
 
     match kind {
+        // The session stays OPEN after launch: on the real device the
+        // invocation + command routing is unreliable (first-party skills
+        // out-prioritize the custom skill for compound utterances), but
+        // WITHIN an active session the utterance is matched against OUR
+        // model first. So the working pattern is: "Alexa, mein aria" →
+        // (Bereit) → "spiel queen" / "zufall" / "was sagt psalm 23".
+        // The reprompt is spoken after a few seconds of silence.
         IntentKind::Launch => ResponseBuilder::new()
             .say("Aria ist bereit. Sag etwa: spiel Musik, oder frage mich etwas.")
-            .end_session()
+            .open_session()
+            .reprompt("Ich warte: sag spiel oder frage — oder stopp, wenn du fertig bist.")
             .build(),
         IntentKind::SessionEnded | IntentKind::SystemRequest => {
             // Persist on the way out.
