@@ -33,9 +33,10 @@ use std::process::exit;
 
 const SIDECAR: &str = r#"
         # li7-only sidecar (injected by deploy/li7/inject.rs — the
-        # chart itself is render-generated): the ASK surface. The ingress
-        # routes /alexa, /stream/*, /art/* here (port 8090); everything else
-        # goes to the brain (port {{ .Values.containerPort }}).
+        # chart itself is render-generated): the ASK surface + the web app.
+        # The ingress routes /alexa, /stream/*, /art/*, /skill-icons AND the
+        # web app (/ → SPA, /dl → download API) here (port 8090); the brain
+        # keeps /api, /mcp, /openapi.json, /readyz.
         - name: aria-ask
           image: mosaic/aria-ask:__TAG__
           imagePullPolicy: Never
@@ -68,6 +69,14 @@ const SIDECAR: &str = r#"
                   name: moaic-aria-client-id
                   key: ARIA_CLIENT_ID
                   optional: true
+            # Web-app login token for /dl/* (the download manager). Rides a
+            # secret like the client id; optional = open access (dev).
+            - name: ARIA_WEB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: moaic-aria-web-token
+                  key: ARIA_WEB_TOKEN
+                  optional: true
           readinessProbe:
             httpGet:
               path: /health
@@ -77,13 +86,13 @@ const SIDECAR: &str = r#"
           resources:
             requests:
               cpu: 100m
-              # The adapter is a small streaming proxy (RSS ~30-50 Mi) —
-              # 128 Mi keeps the TOTAL pod request under the headroom a
-              # fully-occupied li7 node leaves for it (see the tessera
-              # resources comment).
-              memory: 128Mi
+              # The adapter is a small streaming proxy (RSS ~30-50 Mi) but
+              # also hosts the web download worker (yt-dlp + ffmpeg bursts);
+              # 256 Mi request / 2 Gi limit keep the pod schedulable while
+              # leaving download headroom (single replica, no-surge).
+              memory: 256Mi
             limits:
-              memory: 1Gi
+              memory: 2Gi
           volumeMounts:
             {{- if and .Values.dataPvc .Values.dataPvc.enabled }}
             - name: data
@@ -95,6 +104,12 @@ const SIDECAR: &str = r#"
               mountPath: /data
             - name: media
               mountPath: /media
+            # The host's user bin (yt-dlp, self-updating via tools/aria-dl):
+            # read-only into the container so the web download worker can
+            # exec it without baking it into the image.
+            - name: yt-bin
+              mountPath: /opt/ytbin
+              readOnly: true
 "#;
 
 /// The brain container's dataPvc-conditional /data mount — the render's ONLY
@@ -175,6 +190,13 @@ const VOLUMES_NEW: &str = r#"      volumes:
         - name: host-vector
           hostPath:
             path: /var/lib/aria-lancedb
+            type: Directory
+        # li7 (injected): the user's per-user bin — holds the self-updating
+        # yt-dlp (tools/aria-dl installs it to ~/.local/bin). Directory (not
+        # Create): a missing dir is a misconfiguration, fail loudly.
+        - name: yt-bin
+          hostPath:
+            path: /home/ee/.local/bin
             type: Directory"#;
 
 const SVC_PORTS_NEW: &str = r"  ports:
@@ -218,9 +240,9 @@ const INGRESS_OLD: &str = r#"        paths:
 "#;
 
 const INGRESS_NEW: &str = r#"        paths:
-          # li7 (injected by inject.rs): the ASK surface (the
-          # aria-ask sidecar) owns the Alexa endpoints; the brain owns the
-          # rest (REST, MCP, chat, A2A, docs).
+          # li7 (injected by inject.rs): the aria-ask sidecar owns the Alexa
+          # endpoints AND the web app (the SPA at / + the /dl download API);
+          # the brain keeps its API surface (REST, MCP, docs, health).
           - path: /alexa
             pathType: Prefix
             backend:
@@ -250,14 +272,44 @@ const INGRESS_NEW: &str = r#"        paths:
                 name: {{ include "aria.fullname" $root }}
                 port:
                   number: 8090
-          - path: /
+          # Brain API surface (longest prefix wins in nginx-ingress).
+          - path: /api
             pathType: Prefix
             backend:
               service:
                 name: {{ include "aria.fullname" $root }}
                 port:
                   number: {{ $root.Values.containerPort }}
-"#;
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aria.fullname" $root }}
+                port:
+                  number: {{ $root.Values.containerPort }}
+          - path: /openapi.json
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aria.fullname" $root }}
+                port:
+                  number: {{ $root.Values.containerPort }}
+          - path: /readyz
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aria.fullname" $root }}
+                port:
+                  number: {{ $root.Values.containerPort }}
+          # The web app (the aria-ask sidecar serves the SPA at /).
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aria.fullname" $root }}
+                port:
+                  number: 8090
+ "#;
 
 /// Replace the first occurrence of `old` with `new` (the python injector
 /// used str.replace(..., 1) semantics).

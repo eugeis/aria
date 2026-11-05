@@ -28,6 +28,9 @@ public_base_url = "https://aria.eisler-systems.de"
 # other skill are rejected with an empty response. Set it in the console
 # (Endpoint configuration → Client ID) and via ARIA_CLIENT_ID (or uncomment):
 # client_id = "amzn1.ask.skill.YOUR-SKILL-CLIENT-ID"
+# Login token for the web app (/ and /dl/*). When set, the browser must
+# present it once; /dl/* then requires the cookie. Set via ARIA_WEB_TOKEN.
+# web_token = "CHANGE-ME"
 # Native TLS (cert+key). Leave unset when the ingress terminates TLS.
 # tls_cert = "/etc/ssl/cert.pem"
 # tls_key  = "/etc/ssl/key.pem"

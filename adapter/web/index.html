@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aria — Downloads</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#101418">
+</head>
+<body>
+
+<div id="login" class="login hidden">
+  <div class="login-card">
+    <img src="/icon.svg" alt="" width="48" height="48">
+    <h1>Aria</h1>
+    <p class="muted">Gib das Web-Token ein (vom li7-Server, Secret <code>moaic-aria-web-token</code>).</p>
+    <form id="login-form">
+      <input id="login-token" type="password" placeholder="Web-Token" autocomplete="current-password" required>
+      <button type="submit">Anmelden</button>
+    </form>
+    <p id="login-error" class="error"></p>
+  </div>
+</div>
+
+<header>
+  <div class="brand"><img src="/icon.svg" alt="" width="28" height="28"> Aria <span>Downloads</span></div>
+  <div class="status">
+    <span id="cookie-badge" class="badge muted">Sitzung: ?</span>
+    <button id="logout" class="ghost hidden">Abmelden</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button data-tab="search" class="active">Suche</button>
+  <button data-tab="playlist">Playlist</button>
+  <button data-tab="queue">Warteschlange <span id="queue-count" class="count hidden">0</span></button>
+  <button data-tab="cookies">YouTube-Login</button>
+</nav>
+
+<main>
+  <section id="tab-search" class="tab active">
+    <div class="row">
+      <input id="search-q" type="search" placeholder="z. B. Hans Eckardt Choral, Lied, Chorwerk …" autocomplete="off">
+      <select id="search-n" title="Anzahl Treffer">
+        <option>5</option><option selected>10</option><option>20</option><option>50</option>
+      </select>
+      <button id="search-go">Suchen</button>
+    </div>
+    <div id="search-targets" class="targets hidden">
+      <label>Künstler <input id="search-artist" type="text" placeholder="Künstler/Band"></label>
+      <label>Album <input id="search-album" type="text" placeholder="Album / Playlist-Titel"></label>
+      <label>Sammlung <select id="search-collection"></select></label>
+      <button id="search-add" disabled>Markierte in die Warteschlange</button>
+    </div>
+    <div id="search-results" class="results"></div>
+  </section>
+
+  <section id="tab-playlist" class="tab">
+    <div class="row">
+      <input id="pl-url" type="url" placeholder="https://www.youtube.com/playlist?list=…  (oder Video-URL)" autocomplete="off">
+      <button id="pl-go">Laden</button>
+    </div>
+    <div id="pl-title" class="pl-title muted"></div>
+    <div id="pl-targets" class="targets hidden">
+      <label>Künstler <input id="pl-artist" type="text" placeholder="Künstler/Band"></label>
+      <label>Album <input id="pl-album" type="text" placeholder="Playlist-Titel"></label>
+      <label>Sammlung <select id="pl-collection"></select></label>
+      <button id="pl-add" disabled>Markierte in die Warteschlange</button>
+    </div>
+    <div id="pl-results" class="results"></div>
+  </section>
+
+  <section id="tab-queue" class="tab">
+    <div class="row">
+      <span id="queue-state" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="queue-clear" class="ghost">Fertige entfernen</button>
+    </div>
+    <div id="queue-wrap" class="table-wrap">
+      <table id="queue-table" class="hidden">
+        <thead>
+          <tr><th>#</th><th>Titel</th><th>Künstler / Album</th><th>Sammlung</th><th>Status</th><th>Aktion</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="queue-empty" class="muted">Keine Downloads in der Warteschlange.</p>
+    </div>
+  </section>
+
+  <section id="tab-cookies" class="tab">
+    <h2>YouTube-Sitzung verbinden</h2>
+    <p class="muted">
+      Downloads laufen über yt-dlp. Damit sie deine Premium-Sitzung nutzen (weniger
+      Bot-Checks, altersfreigegebene Inhalte), verbinde deine Browser-Cookies:
+    </p>
+    <ol class="help">
+      <li>Logge dich in deinem Browser bei <b>youtube.com</b> an.</li>
+      <li>Installiere eine Cookies-Erweiterung (Firefox: <i>„Get cookies.txt LOCALLY“</i>, Chrome/Edge: <i>„cookies.txt“</i>) und exportiere die Cookies von <code>.youtube.com</code> als <code>cookies.txt</code>.</li>
+      <li>Lade die Datei unten hoch — sie wird mit Rechten <code>600</code> in <code>/data/adapter</code> gespeichert und nur von yt-dlp gelesen.</li>
+    </ol>
+    <div id="cookie-status" class="cookie-status"></div>
+    <div class="row">
+      <input id="cookie-file" type="file" accept=".txt,text/plain">
+      <button id="cookie-upload">Hochladen</button>
+      <button id="cookie-delete" class="ghost danger">Entfernen</button>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/app.js"></script>
+</body>
+</html>

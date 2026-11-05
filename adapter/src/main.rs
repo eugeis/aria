@@ -24,6 +24,7 @@ mod router;
 mod scan;
 mod state;
 mod stream;
+mod web;
 
 use agent::{BrainAgent, MockAgent};
 
@@ -226,6 +227,9 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
         });
     }
 
+    // The web app (the SPA + the /dl download API) runs in this container;
+    // it owns `/`, while the Alexa/stream endpoints stay as before.
+    web::spawn_worker(state.clone());
     let app = Router::new()
         .route("/alexa", axum::routing::post(stream::handle_alexa))
         .route("/stream/{token}", get(stream::handle_stream))
@@ -233,6 +237,7 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
         .route("/skill-icons/icon-108.png", get(stream::handle_icon_108))
         .route("/skill-icons/icon-512.png", get(stream::handle_icon_512))
         .route("/health", get(stream::handle_health))
+        .merge(web::routes())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);
 

@@ -19,18 +19,22 @@ pub struct AppState {
     pub players: Mutex<HashMap<String, PlayerState>>,
     pub registry: PlaybackRegistry,
     pub agent: Arc<dyn AgentBackend>,
+    /// The web-app download queue (persisted at {data_dir}/dl-queue.json).
+    pub dl_queue: Arc<crate::web::DlQueue>,
     pub started: Instant,
 }
 
 impl AppState {
     pub fn new(cfg: Config, library: Library, agent: Arc<dyn AgentBackend>) -> Self {
         let players = load_state(&cfg.state_path()).players;
+        let dl_queue = crate::web::DlQueue::load(&cfg);
         Self {
             cfg,
             library: Arc::new(RwLock::new(library)),
             players: Mutex::new(players),
             registry: PlaybackRegistry::new(),
             agent,
+            dl_queue,
             started: Instant::now(),
         }
     }

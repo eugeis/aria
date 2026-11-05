@@ -25,7 +25,7 @@ use crate::state::AppState;
 #[axum::debug_handler]
 pub async fn handle_alexa(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     req: Request<Body>,
 ) -> impl IntoResponse {
     let bytes = axum::body::to_bytes(req.into_body(), 1_048_576)

@@ -33,6 +33,9 @@ pub struct ServerConfig {
     pub tls_key: Option<PathBuf>,
     /// Where state.json lives.
     pub data_dir: Option<PathBuf>,
+    /// Web-app login token for the `/dl/*` API (env ARIA_WEB_TOKEN).
+    /// None = open access (dev only).
+    pub web_token: Option<String>,
 }
 
 /// The user's media collections: one or more folders, each with a kind.
@@ -133,6 +136,7 @@ impl Default for ServerConfig {
             tls_cert: None,
             tls_key: None,
             data_dir: None,
+            web_token: None,
         }
     }
 }
@@ -215,6 +219,16 @@ impl Config {
             .map(|e| e.item())
             .collect::<Result<Vec<_>, _>>()
     }
+
+    /// The folder of the named collection (case-insensitive) — downloads
+    /// land inside it.
+    pub fn collection_path(&self, name: &str) -> Option<PathBuf> {
+        self.collections
+            .items
+            .iter()
+            .find(|i| i.name.eq_ignore_ascii_case(name))
+            .map(|i| i.path.clone())
+    }
 }
 
 pub fn default_data_dir() -> PathBuf {
@@ -273,6 +287,11 @@ fn apply_env(mut cfg: Config) -> Config {
     if let Ok(c) = std::env::var("ARIA_CLIENT_ID") {
         if !c.is_empty() {
             cfg.server.client_id = Some(c);
+        }
+    }
+    if let Ok(t) = std::env::var("ARIA_WEB_TOKEN") {
+        if !t.is_empty() {
+            cfg.server.web_token = Some(t);
         }
     }
     cfg
