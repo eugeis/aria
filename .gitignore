@@ -11,3 +11,4 @@ adapter/target/
 .env
 dist/
 Cargo.lock.bak
+*.DS_Store
