@@ -14,7 +14,24 @@ the workflow strips it).
 | `/home/ee/.ssh/openrouter` | `MOAIC_CHAT_API_KEY` → `moaic-chat-api-key` | the OpenRouter key for the voice brain — house policy: ALL mosaic apps run their operations on OpenRouter (the in-house vLLM box is dev/data-prep only). This is the SAME file the pages app uses; the deploy workflow points at it directly. |
 | `/home/ee/.ssh/bible-reader-token` | `MOAIC_MCP_BIBLE_AUTH` → `moaic-mcp-bible-auth` | the bible app's `reader` service-account token — the bearer the brain's MCP client presents to `https://bible.eisler-systems.de/mcp` (share it from bible's `MOAIC_READER_TOKEN` secret) |
 | `/home/ee/.ssh/aria-client-id` | `ARIA_CLIENT_ID` → `moaic-aria-client-id` | the Alexa skill's Client ID (console → Endpoint configuration) — the `/alexa` request check only accepts envelopes from this skill. `secretKeyRef` is `optional: true`: no file/secret = check off (fail-soft, the pod never crashes on it) |
-| `/home/ee/.ssh/aria-web-token` | `ARIA_WEB_TOKEN` → `moaic-aria-web-token` | the web-app login token (the download manager at `https://aria.eisler-systems.de/` — the browser must present it once via `/dl/login`). `secretKeyRef` is `optional: true`: no secret = open access (dev only — always set it on li7). The value is the single source of truth in this file; the same token is also shown to the user for the browser. |
+| `/home/ee/.ssh/aria-web-token` | `ARIA_WEB_TOKEN` → `moaic-aria-web-token` | LEGACY single web-login token (dev fallback only — honoured when no JWT secret is configured). The real web login is the app identity (below). |
+
+**Web login = the app's identity (2026-11, like the bible app):** the
+download manager at `https://aria.eisler-systems.de/` logs in with the
+app's user accounts — the SPA posts to the brain's `POST /api/auth/login`
+(username `admin`, password = the value of
+`/home/ee/.ssh/aria-admin-password`, a generated 32-hex secret synced from
+the `moaic-admin-password` k8s secret) and exchanges the returned JWT for
+the shared `mosaic_token` identity cookie. The sidecar verifies the JWT
+locally (HS256 with `MOAIC_JWT_SECRET` — it rides the existing
+`moaic-jwt-secret` secret), so one credential covers voice + web. The
+legacy single `aria-web-token` is NOT accepted while the JWT secret is
+configured (dev fallback only). The OIDC SSO path (ADR 0150) is wired in
+the sidecar too: set `MOAIC_OIDC_PUBLIC_KEY` (IdP public key PEM) +
+`ARIA_OIDC_ISSUER` / `ARIA_OIDC_CLIENT_ID` env and IdP-issued RS256 tokens
+are accepted. Password resets (admin API, ADR 0125) persist to the IAM
+state file and win over the secret — if the password is changed in the
+app, update this file/secret to match.
 
 Missing files do not fail the deploy — the matching surface fails soft
 (workflow LLM answers, the bible MCP tools, or auth) until the secret exists.

@@ -138,10 +138,14 @@ What a Mosaic app cannot declare (Law 1) and the Echo needs:
   playlist lookup via yt-dlp, a persistent download queue worked one item at
   a time (yt-dlp → MP3 192 k → ID3 tags → `<collection>/<Artist>/<Album>/NN -
   title.mp3`), and an automatic rescan + brain reindex when the queue
-  drains. Gated by the `ARIA_WEB_TOKEN` web login. The pod sees the host's
-  self-updating yt-dlp read-only at `/opt/ytbin` (`~/.local/bin` hostPath);
-  ffmpeg is baked into the adapter image. See
-  `deploy/li7/SECRETS.md` → "Web app + YouTube downloads".
+  drains. **Login = the app's identity** (like the bible web app): the SPA
+  authenticates against the brain's `POST /api/auth/login` (username/
+  password) and the sidecar verifies the resulting JWT locally
+  (`MOAIC_JWT_SECRET`), storing it in the shared `mosaic_token` cookie;
+  the OIDC IdP path (RS256, ADR 0150) is wired for later SSO. The pod sees
+  the host's self-updating yt-dlp read-only at `/opt/ytbin`
+  (`~/.local/bin` hostPath); ffmpeg + python3 + nodejs are baked into the
+  adapter image. See `deploy/li7/SECRETS.md` → "Web app + YouTube downloads".
 
 ## Developing locally
 
