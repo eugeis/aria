@@ -34,6 +34,16 @@ pub async fn handle_alexa(
         .unwrap_or_default();
     match serde_json::from_slice::<aria_alexa::Envelope>(&bytes) {
         Ok(env) => {
+            // Every request leaves a trace (type + intent + transcript):
+            // "the Echo got no valid answer" is otherwise a black box — we
+            // cannot distinguish "it never reached us" from "we answered
+            // empty".
+            tracing::info!(
+                request_type = %env.request.request_type,
+                intent = ?env.request.intent.as_ref().and_then(|i| i.name.as_deref()),
+                utterance = ?env.request.utterance.as_deref(),
+                "alexa request"
+            );
             // Client-id check (prevents other skills hitting this endpoint).
             if let (Some(want), Some(got)) =
                 (state.cfg.server.client_id.as_deref(), env.application_id())
