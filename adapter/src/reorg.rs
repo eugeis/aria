@@ -249,8 +249,8 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
         let rel_s = rel.to_string_lossy().to_string();
         let ext = ext_of(&t.path);
         let (segs, name) = target_of(move_style, t, &ext);
-        let needs_catalog_fix =
-            kind == "music" && (needs_work(&t.artist) || needs_work(&t.album) || needs_work(&t.title));
+        let needs_catalog_fix = kind == "music"
+            && (needs_work(&t.artist) || needs_work(&t.album) || needs_work(&t.title));
         if name.is_empty() {
             if needs_catalog_fix {
                 push_ambiguous(&mut ambiguous, t);
@@ -712,24 +712,44 @@ async fn handle_suggest(
     if body.tracks.is_empty() {
         return Json(serde_json::json!({"ok": true, "suggestions": []})).into_response();
     }
-    let tracks_json = serde_json::to_string(&body.tracks).unwrap_or_else(|_| "[]".to_string());
-    match state
-        .agent
-        .reorg_suggest(&tracks_json, std::time::Duration::from_secs(60))
-        .await
-    {
-        Ok(raw) => {
-            let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Array(vec![]));
-            let arr = v.get("suggestions").cloned().unwrap_or(v);
-            let arr = arr.as_array().cloned().unwrap_or_default();
-            Json(serde_json::json!({"ok": true, "suggestions": arr})).into_response()
+    // One workflow call per BATCH tracks: a few hundred tracks in a single
+    // prompt would overflow the context window (the live plan has 491
+    // ambiguous). Sequential batches, merged.
+    const BATCH: usize = 40;
+    let mut out: Vec<Value> = Vec::new();
+    let mut failed_batches = 0usize;
+    for chunk in body.tracks.chunks(BATCH) {
+        let tracks_json = serde_json::to_string(chunk).unwrap_or_else(|_| "[]".to_string());
+        match state
+            .agent
+            .reorg_suggest(&tracks_json, std::time::Duration::from_secs(120))
+            .await
+        {
+            Ok(raw) => {
+                let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Array(vec![]));
+                let arr = v.get("suggestions").cloned().unwrap_or(v);
+                out.extend(arr.as_array().cloned().unwrap_or_default());
+            }
+            Err(e) => {
+                failed_batches += 1;
+                tracing::warn!(%e, "reorg suggest batch failed");
+            }
         }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"ok": false, "error": format!("suggest: {e}")})),
-        )
-            .into_response(),
     }
+    if out.is_empty() && failed_batches > 0 {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"ok": false, "error": "suggest: all batches failed"})),
+        )
+            .into_response();
+    }
+    Json(serde_json::json!({
+        "ok": true,
+        "suggestions": out,
+        "batches": body.tracks.len().div_ceil(BATCH),
+        "failed_batches": failed_batches,
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -781,7 +801,6 @@ async fn handle_apply_tags(
 // router
 // ---------------------------------------------------------------------------
 
-
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/dl/reorg/plan", get(handle_plan))
@@ -790,7 +809,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dl/reorg/suggest", post(handle_suggest))
         .route("/dl/reorg/apply-tags", post(handle_apply_tags))
 }
-
 
 #[cfg(test)]
 mod tests {
