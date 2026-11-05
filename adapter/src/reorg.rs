@@ -250,7 +250,7 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
         let ext = ext_of(&t.path);
         let (segs, name) = target_of(move_style, t, &ext);
         let needs_catalog_fix =
-            kind == "music" && (t.artist.trim().is_empty() || t.album.trim().is_empty());
+            kind == "music" && (needs_work(&t.artist) || needs_work(&t.album));
         if name.is_empty() {
             if needs_catalog_fix {
                 push_ambiguous(&mut ambiguous, t);
@@ -352,6 +352,40 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
         ambiguous,
         move_bytes,
     }
+}
+
+/// Empty OR placeholder-junk ("~1", "??", "Kein Künstler" — no real letters
+/// / a known placeholder) = the field needs catalog work.
+fn needs_work(s: &str) -> bool {
+    let n = s.trim();
+    if n.is_empty() {
+        return true;
+    }
+    let has_letter = n
+        .chars()
+        .any(|c| c.is_ascii_alphabetic() || ('À'..='ß').contains(&c) || ('à'..='ÿ').contains(&c));
+    if !has_letter {
+        return true;
+    }
+    let low = n.to_lowercase();
+    matches!(
+        low.as_str(),
+        "kein kuenstler"
+            | "kein künstler"
+            | "keine kuensterin"
+            | "keine künstlerin"
+            | "unbekannt"
+            | "unbekannter kuenstler"
+            | "unbekannter künstler"
+            | "unknown"
+            | "unknown artist"
+            | "n/a"
+            | "none"
+            | "various artists"
+            | "diverse"
+            | "artist"
+            | "album"
+    )
 }
 
 fn push_ambiguous(v: &mut Vec<Value>, t: &aria_audio::Track) {
