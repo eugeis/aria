@@ -78,10 +78,10 @@ async function playCurrent() {
   const cur = player.context[player.idx];
   if (!cur) return;
   $("player").classList.remove("hidden");
-  $("pp-title").textContent = cur.title;
-  $("pp-artist").textContent = cur.artist || "";
-  $("pp-play").textContent = "❚❚";
   try {
+    $("player-title").textContent = cur.title;
+    $("player-artist").textContent = cur.artist || "";
+    $("pp-play").textContent = "❚❚";
     let url;
     if (cur.path) {
       // Offline entry: cache-first blob URL (works without a connection).
@@ -919,7 +919,9 @@ function renderPlItems() {
 }
 
 function plPlayableTracks() {
-  return (openPlaylist?.items || []).filter((it) => it.kind === "track" && it.track_id != null && it.playable !== false && !it.missing);
+  return (openPlaylist?.items || [])
+    .filter((it) => it.kind === "track" && it.track_id != null && it.playable !== false && !it.missing)
+    .map((it) => ({ id: it.track_id, title: it.title, artist: it.artist || "" }));
 }
 
 function playPlItem(pos) {
@@ -967,7 +969,7 @@ async function addToPlaylist(items, plId, done) {
 
 $("pl-cards").addEventListener("click", (e) => {
   const card = e.target.closest(".pl-card");
-  if (card) openPlaylistView(card.dataset.pl);
+  if (card) openPlaylistView(card.dataset.pl).catch((err) => toast(`Playlist nicht geöffnet: ${err.message}`, true));
 });
 
 $("pl-new").addEventListener("click", async () => {
