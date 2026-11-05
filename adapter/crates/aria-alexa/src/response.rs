@@ -22,16 +22,14 @@ pub struct ResponseBody {
     pub output_speech: Option<OutputSpeech>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reprompt: Option<OutputSpeech>,
-    #[serde(skip_serializing_if = "is_true")]
+    // ASK requires this field on every response — an OPEN session must be
+    // an explicit `"shouldEndSession": false`, not an omitted field
+    // (omission is a validation error / undefined session behavior).
     pub should_end_session: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub directives: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_attributes: Option<Value>,
-}
-
-fn is_true(b: &bool) -> bool {
-    !*b
 }
 
 #[derive(Debug, Clone, Serialize)]
