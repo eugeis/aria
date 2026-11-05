@@ -68,6 +68,35 @@ pub fn parse_style(s: &str) -> Option<Style> {
     }
 }
 
+/// Normalized form for COMPARING paths/folders (not for writing):
+/// lowercase, a leading "NN - "/"NN." number prefix stripped per segment,
+/// punctuation gone, whitespace collapsed. Two names that differ only in
+/// case, numbering, spacing or punctuation compare equal — a file that is
+/// already in its (normalized) target place is NOT a move.
+fn norm_cmp(s: &str) -> String {
+    let low = s.to_lowercase();
+    let no_num = low.split(['-', '.']).next().unwrap_or(&low);
+    let no_num = if no_num.trim().chars().all(|c| c.is_ascii_digit()) && !no_num.trim().is_empty() {
+        // "01 - title" → "title"; otherwise keep the whole name
+        low.split(['-', '.']).skip(1).collect::<Vec<_>>().join("-")
+    } else {
+        low.clone()
+    };
+    let out: String = no_num
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ')
+        .collect();
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn norm_rel(p: &str) -> String {
+    p.split('/')
+        .map(norm_cmp)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Folder-name safety: strip the Windows/POSIX offenders, collapse spaces.
 fn sanitize(s: &str) -> String {
     let out: String = s
@@ -262,6 +291,15 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
             v.push(name.clone());
             v.join("/")
         };
+        // Already in place (normalized): case / numbering / spacing /
+        // punctuation differences between tag-derived and on-disk names are
+        // cosmetic — no move, no duplicated folder.
+        if norm_rel(&target_s) == norm_rel(&rel_s) {
+            if needs_catalog_fix {
+                push_ambiguous(&mut ambiguous, t);
+            }
+            continue;
+        }
         if target_s != rel_s {
             // Collision with a file that is NOT this track → deterministic
             // " (2)", " (3)" … suffix on the file name.
@@ -813,6 +851,51 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cosmetic differences (case, numbering prefixes, spacing, extension
+    /// case) between tag-derived and on-disk names are NOT moves — that is
+    /// what made the live plan want to duplicate 1 160 already-placed files.
+    #[test]
+    fn plan_treats_normalized_in_place_files_as_settled() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-reorg-norm-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = dir.join("musik");
+        // On-disk: numbered prefix + uppercase extension; tags carry the
+        // same name with a different prefix/case → must NOT move.
+        std::fs::create_dir_all(root.join(
+            "Bibel-Memory/Lernkurs Gottes Verheißungen/00 - Lernkurs Gottes Verheißungen - Teil 01",
+        ))
+        .unwrap();
+        std::fs::write(
+            root.join("Bibel-Memory/Lernkurs Gottes Verheißungen/00 - Lernkurs Gottes Verheißungen - Teil 01/12 - ...unsere Sehnsucht zu stillen.MP3"),
+            b"norm-1",
+        )
+        .unwrap();
+        let items = [aria_audio::CollectionItem {
+            name: "musik".into(),
+            kind: CollectionKind::Music,
+            path: root.clone(),
+        }];
+        let lib = aria_audio::Library::scan_collections(&items).unwrap();
+        // Give the track the tag-derived name (no "00 - " folder prefix,
+        // different case) — simulates the live mismatch.
+        let plan = plan(&lib, &root, "musik", Style::ArtistAlbum);
+        assert!(
+            plan.moves.iter().all(|m| {
+                // A move is legitimate only when the NORMALIZED paths differ.
+                norm_rel(&m.from) != norm_rel(&m.to)
+            }),
+            "no cosmetic-only moves: {:?}",
+            plan.moves
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The whole reorg dance on a messy on-disk collection: the plan finds
     /// the moves, apply_moves executes them, and the fingerprint registry
