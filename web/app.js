@@ -45,12 +45,13 @@ function toast(msg, isError = false) {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: opts.body && !(opts.body instanceof FormData) && typeof opts.body !== "string"
-      ? { "Content-Type": "application/json" }
-      : opts.body instanceof FormData ? {} : undefined,
-    ...opts,
-  });
+  // Stringified JSON bodies are still JSON — the server must see the
+  // Content-Type or the axum Json extractor answers 415. Caller headers win.
+  const headers = { ...(opts.headers || {}) };
+  if (opts.body !== undefined && !(opts.body instanceof FormData) && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const res = await fetch(path, { ...opts, headers });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
     throw new Error(data.error || data.errors?.join(" ") || `HTTP ${res.status}`);
