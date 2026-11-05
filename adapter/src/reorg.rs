@@ -110,11 +110,29 @@ fn title_nodate(t: &str) -> &str {
 
 /// The target (folder segments relative to the collection root + file
 /// name) for a track under a style. Empty name = Keep (no move).
+/// The track number: the tag when present, else the filename's leading
+/// number ("01 - ", "12." — the classic ripped-CD naming), else 00.
+fn nn_of(t: &aria_audio::Track) -> String {
+    if let Some(n) = t.track_no {
+        return format!("{n:02}");
+    }
+    let stem = Path::new(&t.path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if let Some(pos) = stem.find(['-', '.']) {
+        let prefix = stem[..pos].trim();
+        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(n) = prefix.parse::<u32>() {
+                return format!("{n:02}");
+            }
+        }
+    }
+    "00".to_string()
+}
+
 fn target_of(style: Style, t: &aria_audio::Track, ext: &str) -> (Vec<String>, String) {
-    let nn = t
-        .track_no
-        .map(|n| format!("{n:02}"))
-        .unwrap_or_else(|| "00".to_string());
+    let nn = nn_of(t);
     let base = match t.kind {
         CollectionKind::Music => title_clean(&t.title),
         CollectionKind::Sermon => title_nodate(&t.title),
@@ -150,7 +168,7 @@ fn target_of(style: Style, t: &aria_audio::Track, ext: &str) -> (Vec<String>, St
 // plan
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct Move {
     pub track_id: u64,
     pub title: String,
@@ -160,7 +178,7 @@ pub struct Move {
     pub reason: String,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct DupTrack {
     pub track_id: u64,
     pub title: String,
@@ -169,13 +187,13 @@ pub struct DupTrack {
     pub duration_ms: u64,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct DupGroup {
     pub fingerprint: u64,
     pub tracks: Vec<DupTrack>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ReorgPlan {
     pub style: String,
     pub collection: String,
@@ -359,7 +377,7 @@ fn push_ambiguous(v: &mut Vec<Value>, t: &aria_audio::Track) {
 // apply
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ApplyReport {
     pub moved: usize,
     pub failed: Vec<Value>,
@@ -726,6 +744,7 @@ async fn handle_apply_tags(
 // router
 // ---------------------------------------------------------------------------
 
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/dl/reorg/plan", get(handle_plan))
@@ -733,4 +752,155 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dl/reorg/dedupe", post(handle_dedupe))
         .route("/dl/reorg/suggest", post(handle_suggest))
         .route("/dl/reorg/apply-tags", post(handle_apply_tags))
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole reorg dance on a messy on-disk collection: the plan finds
+    /// the moves, apply_moves executes them, and the fingerprint registry
+    /// keeps the ids stable across the move (the embedding-safe property).
+    #[test]
+    fn plan_and_apply_move_files_and_keep_ids() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-reorg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = dir.join("musik");
+        std::fs::create_dir_all(&root).unwrap();
+        // Messy: files flat in the root with numberless names, no tags
+        // (artist/album come from the FILE NAME conventions only when the
+        // tags are absent — here they are empty, so the plan must still
+        // produce a clean flat layout at minimum).
+        std::fs::write(root.join("01 - Bohemian.mp3"), b"fake-aaa-1111").unwrap();
+        std::fs::write(root.join("02 - Radio.mp3"), b"fake-bbb-2222").unwrap();
+
+        let items = [aria_audio::CollectionItem {
+            name: "musik".into(),
+            kind: CollectionKind::Music,
+            path: root.clone(),
+        }];
+        // One registry across ALL scans (the deployment's mode) — this is
+        // what makes the ids (and thus the record slugs / embeddings)
+        // stable across the move.
+        let mut reg = aria_audio::IdRegistry::default();
+        let lib = aria_audio::Library::scan_collections_with(&items, &mut reg).unwrap();
+        assert_eq!(lib.len(), 2);
+        let id_of = |lib: &aria_audio::Library, suffix: &str| {
+            lib.iter()
+                .find(|t| t.path.ends_with(suffix))
+                .map(|t| t.id)
+                .expect("track present")
+        };
+        let bohem_before = id_of(&lib, "Bohemian.mp3");
+        let radio_before = id_of(&lib, "Radio.mp3");
+        // Track the bohemian file across its rename by CONTENT (that's the
+        // registry's key) — its filename changes twice in this test.
+        let bohem_fp = lib
+            .iter()
+            .find(|t| t.id == bohem_before)
+            .unwrap()
+            .fingerprint;
+
+        // flat style: the titles already are "NN - x" → no moves needed.
+        let plan_flat = plan(&lib, &root, "musik", Style::Flat);
+        assert!(
+            plan_flat.moves.is_empty(),
+            "flat layout is already met: {:?}",
+            plan_flat.moves
+        );
+
+        // artist-album with empty tags: artist/album are empty → the
+        // target is flat anyway → still no moves (nothing to group by).
+        let plan_aa = plan(&lib, &root, "musik", Style::ArtistAlbum);
+        assert!(plan_aa.moves.is_empty());
+
+        // Now give the tracks tags (simulating the LLM apply-tags step) via
+        // a second scan of a tagged tree — instead, verify the MOVE path
+        // directly: hand the plan a target layout the files do NOT meet by
+        // using artist-flat with a fake artist assigned through the
+        // library. The simplest real move: rename a file to something the
+        // layout does not match.
+        std::fs::rename(root.join("01 - Bohemian.mp3"), root.join("random_name.mp3")).unwrap();
+        let lib2 = aria_audio::Library::scan_collections_with(&items, &mut reg).unwrap();
+        // The PLAN must now want to move random_name.mp3 back to the flat
+        // layout.
+        let plan2 = plan(&lib2, &root, "musik", Style::Flat);
+        assert!(
+            plan2
+                .moves
+                .iter()
+                .any(|m| m.from == "random_name.mp3" && m.to.starts_with("0")),
+            "the unformatted file is planned for a move: {:?}",
+            plan2.moves
+        );
+        let report = apply_moves(&root, &plan2.moves);
+        assert_eq!(report.moved, plan2.moves.len(), "{:?}", report.failed);
+        assert!(!root.join("random_name.mp3").exists());
+
+        // The whole point: after the move, a rescan with the SAME registry
+        // hands both files the ids they had before — the record slugs (and
+        // the brain's embeddings) are untouched. The bohemian file is found
+        // by its content fingerprint (its name changed twice).
+        let lib3 = aria_audio::Library::scan_collections_with(&items, &mut reg).unwrap();
+        let bohem_after = lib3
+            .iter()
+            .find(|t| t.fingerprint == bohem_fp)
+            .map(|t| t.id)
+            .expect("moved file still present");
+        assert_eq!(bohem_after, bohem_before, "the moved file kept its id");
+        assert_eq!(
+            id_of(&lib3, "Radio.mp3"),
+            radio_before,
+            "untouched file kept its id"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Duplicate detection: two files with identical content share the
+    /// fingerprint and form one group.
+    #[test]
+    fn plan_groups_duplicates_by_fingerprint() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-reorg-dupe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = dir.join("musik");
+        std::fs::create_dir_all(&root).unwrap();
+        let content = b"identical-content-0000000000000000";
+        std::fs::write(root.join("a.mp3"), content).unwrap();
+        std::fs::write(root.join("b.mp3"), content).unwrap();
+        let items = [aria_audio::CollectionItem {
+            name: "musik".into(),
+            kind: CollectionKind::Music,
+            path: root.clone(),
+        }];
+        let lib = aria_audio::Library::scan_collections(&items).unwrap();
+        let plan = plan(&lib, &root, "musik", Style::Keep);
+        assert_eq!(plan.duplicates.len(), 1, "one duplicate group");
+        assert_eq!(plan.duplicates[0].tracks.len(), 2);
+
+        // remove_duplicates keeps the keeper, removes the twin.
+        let keeper = plan.duplicates[0].tracks[0].track_id;
+        let twin = plan.duplicates[0].tracks[1].track_id;
+        let removed = remove_duplicates(&lib, keeper, &[twin]).unwrap();
+        assert_eq!(removed.len(), 1);
+        // Safety: a NON-matching file is refused.
+        let other = lib.iter().find(|t| t.id != keeper && t.id != twin);
+        if let Some(o) = other {
+            let err = remove_duplicates(&lib, keeper, &[o.id]).unwrap_err();
+            assert!(err.contains("does not match"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
