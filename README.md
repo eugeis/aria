@@ -59,7 +59,16 @@ your own sermons and seminar scripts, and a grounded LLM for everything else.
 ```
 tessera.yaml            the BRAIN, declared (identity, model, the media + sermons
                         collections, the bible MCP client, the ask / resolve-play
-                        workflows, the li7 deploy, the e2e suite)
+                        workflows, hydration: vanilla + app.offline + app.native,
+                        the li7 deploy, the e2e suite)
+web/                    the SPA (Aria Musik & Downloads) — served by the brain
+                        (hydration: vanilla); offline.js is emitted next to it
+adapter/                the ASK SURFACE (hand-written Rust, its own workspace)
+  src/                  main (serve/scan), router (ASK intents -> actions/brain),
+                        stream (/alexa /stream /art), music (browse/search/play/
+                        playlists), web (/dl download API + identity exchange),
+                        agent (the brain bridge), scan (lofty walk ->
+                        media.jsonl.gz + reindex), config, state
 knowledge/
   media/media.jsonl.gz  committed SAMPLE of the scan output (e2e + fresh boot);
                         the live one is generated on /data by the adapter
@@ -67,10 +76,6 @@ knowledge/
                         from eugeis/sermons to /data/knowledge/sermons on li7)
   cassettes/aria-llm.json  the O10 LLM cassette — the e2e runs hermetically
                         (recorded responses, no network)
-adapter/                the ASK SURFACE (hand-written Rust, its own workspace)
-  src/                  main (serve/scan), router (ASK intents -> actions/brain),
-                        stream (/alexa /stream /art), agent (the brain bridge),
-                        scan (lofty walk -> media.jsonl.gz + reindex), config, state
   crates/aria-alexa/    the ASK v1 protocol (envelope, intents, SSML)
   crates/aria-audio/    the audio engine (library/collections, player, tokens, search)
   Dockerfile            the mosaic/aria-ask image
@@ -78,8 +83,9 @@ skill/
   interaction-model.json  the Alexa intent model (import in the dev console)
   skill-manifest.json     the skill manifest (endpoint + AUDIO_PLAYER)
 deploy/li7/
-  inject.rs           injects the aria-ask sidecar + media hostPath + ingress
-                        split into the rendered helm chart
+  inject.rs           injects the aria-ask sidecar + media hostPath (adapter
+                        rw, brain ro for the offline catalog) + ingress split
+                        into the rendered helm chart
   SECRETS.md            the runner secret files + host dirs for li7
 .github/workflows/
   ci.yml                brain: render+build+e2e (pinned MOSAIC_REV) · adapter: fmt+clippy+test
@@ -135,20 +141,38 @@ What a Mosaic app cannot declare (Law 1) and the Echo needs:
  ZeroClaw surface is ever needed again, Mosaic's `gateway.routes` gives you a
  byte-passthrough to its REST/SSE side with a 3-line tessera declaration.)
 
-- **the web app (Aria Downloads)** — the sidecar also owns `/`: an embedded
-  static SPA + the `/dl` REST API for growing the library from a browser:
-  YouTube session upload (Netscape `cookies.txt`, stored 0600), search and
-  playlist lookup via yt-dlp, a persistent download queue worked one item at
-  a time (yt-dlp → MP3 192 k → ID3 tags → `<collection>/<Artist>/<Album>/NN -
-  title.mp3`), and an automatic rescan + brain reindex when the queue
-  drains. **Login = the app's identity** (like the bible web app): the SPA
-  authenticates against the brain's `POST /api/auth/login` (username/
-  password) and the sidecar verifies the resulting JWT locally
-  (`MOAIC_JWT_SECRET`), storing it in the shared `mosaic_token` cookie;
-  the OIDC IdP path (RS256, ADR 0150) is wired for later SSO. The pod sees
-  the host's self-updating yt-dlp read-only at `/opt/ytbin`
-  (`~/.local/bin` hostPath); ffmpeg + python3 + nodejs are baked into the
-  adapter image. See `deploy/li7/SECRETS.md` → "Web app + YouTube downloads".
+- **the web app (Aria Musik & Downloads)** — the SPA is a first-class
+  Mosaic citizen: tessera declares `app: hydration: vanilla`, so the BRAIN
+  embeds + serves the repo's `web/` directory at `/` (docs UI moves to
+  `/api/docs`). The SPA is a Spotify-like manager of the local library:
+  browse tree (collection → artist → album → track), instant deterministic
+  search, **playlists** (create / organize / reorder / play-all /
+  download-all), a **streaming player** (`/dl/play` issues a `web`-device
+  token over the adapter's `/stream/{token}` — the Echo's player state is
+  untouched), plus the download manager: YouTube session upload (Netscape
+  `cookies.txt`, stored 0600), search via yt-dlp, a persistent queue worked
+  one item at a time (yt-dlp → MP3 192 k → ID3 tags →
+  `<collection>/<Artist>/<Album>/NN - title.mp3`), and an automatic rescan
+  + brain reindex when the queue drains. All of this sits behind the
+  adapter's `/dl` surface (same origin, split at the ingress). **Login =
+  the app's identity** (like the bible web app): the SPA authenticates
+  against the brain's `POST /api/auth/login` (username/password) and the
+  sidecar verifies the resulting JWT locally (`MOAIC_JWT_SECRET`), storing
+  it in the shared `mosaic_token` cookie; the OIDC IdP path (RS256, ADR
+  0150) is wired for later SSO.
+- **offline mode** — tessera `app: offline: { media_root: /media }`: the
+  brain serves `/api/offline/catalog` + ranged `/api/offline/file` over the
+  (read-only mounted) media tree, and the render ships `offline.js` (the
+  `MosaicOffline` Cache-Storage helper). The SPA's **Offline tab** + ⤓
+  buttons store tracks/albums on the smartphone (PWA) for offline
+  playback.
+- **native (Tauri) apps** — tessera `app: native: { identifier:
+  de.eisler.aria, targets: [macos, linux, windows] }`: `mosaic build` emits
+  `out/native/`, a Tauri v2 shell whose window drives this very server on
+  loopback (spawns `bin/aria serve --bind 127.0.0.1:3000`, waits for
+  `/readyz`, kills it with the last window). See `out/native/README.md`
+  (staging the binary, icons, per-target builds; android/ios are
+  documented scaffolds — the in-process backend port is the follow-up).
 
 ## Developing locally
 
