@@ -43,10 +43,15 @@ const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
 // static SPA
 // ---------------------------------------------------------------------------
 
+/// The SPA assets are recompiled into the image — the browser must never
+/// serve a stale copy (no versioned filenames, so no ETag dance).
 fn text(body: &'static str, mime: &'static str) -> Response {
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, mime)],
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
         body.to_string(),
     )
         .into_response()

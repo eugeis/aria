@@ -206,8 +206,12 @@ $("search-go").addEventListener("click", doSearch);
 $("search-q").addEventListener("keydown", (e) => e.key === "Enter" && doSearch());
 
 function showTargets(which) {
-  $(`${which}-targets`).classList.remove("hidden");
-  $(`${which}-add`).disabled = false;
+  // The search tab's ids use the "search-" prefix, the playlist tab's use
+  // "pl-" — mapping here (a previous version built `playlist-targets`,
+  // which does not exist, and threw on every successful load).
+  const prefix = which === "search" ? "search" : "pl";
+  $(`${prefix}-targets`).classList.remove("hidden");
+  $(`${prefix}-add`).disabled = false;
 }
 
 async function addToQueue(which) {
@@ -251,8 +255,12 @@ async function doPlaylist() {
   try {
     const data = await api(`/dl/playlist?url=${encodeURIComponent(url)}`);
     playlistHits = data.hits || [];
+    // Channel pages report titles like "samuelharfst - Videos" — the
+    // channel handle is the meaningful name (artist + album default).
+    let title = data.title || "";
+    if (data.channel && /-(Videos|Posts|Streams)$/.test(title)) title = data.channel;
     $("pl-title").textContent = playlistHits.length
-      ? `${data.title || url}${data.channel ? " — " + data.channel : ""} · ${playlistHits.length} Titel`
+      ? `${title || url}${data.channel && title !== data.channel ? " — " + data.channel : ""} · ${playlistHits.length} Titel`
       : "Keine Titel gefunden.";
     box.innerHTML =
       playlistHits.length === 0
@@ -269,7 +277,7 @@ async function doPlaylist() {
             )
             .join("");
     if (data.channel && !$("pl-artist").value) $("pl-artist").value = data.channel;
-    if ((data.title || "").length > 1 && !$("pl-album").value) $("pl-album").value = data.title;
+    if (title.length > 1 && !$("pl-album").value) $("pl-album").value = title;
     showTargets("playlist");
   } catch (err) {
     box.innerHTML = `<p class="error">${esc(err.message)}</p>`;

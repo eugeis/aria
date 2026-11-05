@@ -26,12 +26,18 @@ body {
 .spacer { flex: 1; }
 code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
 
-/* login */
+/* login — a full-viewport overlay: while signed out the app beneath is
+   not interactive (previously the tabs behind the card could be clicked
+   into a confusing half-state). */
 .login {
-  min-height: 100vh;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg);
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: auto;
 }
 .login-card {
   background: var(--panel);
