@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const YTDLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
-const YTDLP_BIN: &str = "/usr/local/bin/yt-dlp";
+const YTDLP_SYSTEM: &str = "/usr/local/bin/yt-dlp";
 const DEFAULT_LIBRARY: &str = "/home/ee/audio";
 const DEFAULT_COLLECTION: &str = "musik";
 const FALLBACK_ARTIST: &str = "Downloads";
@@ -56,20 +56,50 @@ fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Where to install/use yt-dlp: prefer the per-user bin (writable without
+/// root); fall back to the system location when that is usable.
+fn ytdlp_path() -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let dir = format!("{home}/.local/bin");
+        if fs::create_dir_all(&dir).is_ok() {
+            // Writability probe via a UNIQUE name — never touch the real
+            // binary (an earlier version deleted it during the probe).
+            let probe = format!("{dir}/.yt-dlp-writetest-{}", std::process::id());
+            if fs::File::create(&probe).is_ok() {
+                let _ = fs::remove_file(&probe);
+                return format!("{dir}/yt-dlp");
+            }
+        }
+    }
+    YTDLP_SYSTEM.to_string()
+}
+
+fn find_ytdlp() -> Option<String> {
+    for candidate in [ytdlp_path(), YTDLP_SYSTEM.to_string(), "yt-dlp".to_string()] {
+        if run(&candidate, &["--version"]).is_ok() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 fn ytdlp_version() -> Option<String> {
-    run(YTDLP_BIN, &["--version"])
-        .ok()
+    find_ytdlp()
+        .and_then(|p| run(&p, &["--version"]).ok())
         .map(|v| v.trim().to_string())
 }
 
 /// Self-update: missing or non-runnable yt-dlp → fetch the latest single
-/// binary from the GitHub release (no apt, no pip).
+/// binary from the GitHub release (no apt, no pip). Returns the binary path.
 fn ensure_ytdlp() -> String {
-    if let Some(v) = ytdlp_version() {
-        return v;
+    if let Some(p) = find_ytdlp() {
+        return p;
     }
-    println!("aria-dl: yt-dlp missing/broken — fetching latest release binary …");
-    let tmp = format!("{YTDLP_BIN}.new");
+    let dest = ytdlp_path();
+    println!(
+        "aria-dl: yt-dlp missing/broken — fetching latest release binary to {dest} …"
+    );
+    let tmp = format!("{dest}.new");
     let status = match Command::new("curl")
         .arg("-fsSL")
         .arg("-o")
@@ -81,20 +111,23 @@ fn ensure_ytdlp() -> String {
         Err(e) => fail(&format!("curl: {e}")),
     };
     if !status.success() {
-        fail(&format!("yt-dlp download failed (curl exit {status})"));
+        let _ = fs::remove_file(&tmp);
+        fail(&format!(
+            "yt-dlp download failed (curl exit {status}) — {dest} not writable?"
+        ));
     }
-    let _ = fs::remove_file(YTDLP_BIN);
-    if fs::rename(&tmp, YTDLP_BIN).is_err() {
-        fail(&format!("cannot install to {YTDLP_BIN} (need write access)"));
+    let _ = fs::remove_file(&dest);
+    if fs::rename(&tmp, &dest).is_err() {
+        fail(&format!("cannot install to {dest} (need write access)"));
     }
-    let _ = Command::new("chmod").arg("755").arg(YTDLP_BIN).status();
+    let _ = Command::new("chmod").arg("755").arg(&dest).status();
     match ytdlp_version() {
         Some(v) => {
             println!("aria-dl: yt-dlp {v} installed");
-            v
         }
         None => fail("yt-dlp installed but still not runnable (binary incompatible?)"),
     }
+    dest
 }
 
 fn ensure_ffmpeg() {
@@ -168,9 +201,9 @@ fn main() {
         return;
     }
 
-    let v = ensure_ytdlp();
+    let bin = ensure_ytdlp();
     ensure_ffmpeg();
-    println!("aria-dl: yt-dlp {v}");
+    println!("aria-dl: yt-dlp {bin}");
 
     match a.cmd.as_str() {
         "search" => {
@@ -179,7 +212,7 @@ fn main() {
             }
             let q = format!("ytsearch{}:{}", a.n, a.query);
             let out = run(
-                YTDLP_BIN,
+                &bin,
                 &[
                     "--flat-playlist",
                     "--no-warnings",
@@ -256,7 +289,7 @@ fn main() {
                 yt_args.splice(0..0, ["--parse-metadata".to_string(), format!("track_number:{t}")]);
             }
             print!("aria-dl: downloading '{target}' … ");
-            let res = run(YTDLP_BIN, &yt_args.iter().map(|s| s.as_str()).collect::<Vec<_>>()[..]);
+            let res = run(&bin, &yt_args.iter().map(|s| s.as_str()).collect::<Vec<_>>()[..]);
             match res {
                 Ok(_) => {
                     // Rename __dl_* → final name, then guarantee the ID3
