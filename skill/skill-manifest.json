@@ -6,14 +6,14 @@
         "en-US": {
           "name": "Aria",
           "summary": "Your own music, audiobooks, Bible and sermons - plus a personal assistant.",
-          "description": "Aria is a personal voice assistant running entirely on your hardware. Play your own music, albums, artists and radio presets, continue audiobooks, hear Bible verses (500+ translations) and your own sermon recordings, ask about your sermon scripts - and ask your LLM anything, grounded in your collections. Say: play bohemian rhapsody, play psalm 23, or ask my orion anything.",
+          "description": "Aria is a personal voice assistant running entirely on your hardware. Play your own music, albums, artists and radio presets, continue audiobooks, hear Bible verses (500+ translations) and your own sermon recordings, ask about your sermon scripts - and ask your LLM anything, grounded in your collections. Say: play bohemian rhapsody, play psalm 23, or ask my aria anything.",
           "smallIconUri": "https://aria.eisler-systems.de/skill-icons/icon-108.png",
           "largeIconUri": "https://aria.eisler-systems.de/skill-icons/icon-512.png"
         },
         "de-DE": {
           "name": "Aria",
           "summary": "Deine eigene Musik, Hörbücher, Bibel und Predigten — plus ein persönlicher Assistent — über deinen Echo.",
-          "description": "Aria ist ein persönlicher Sprachassistent, der vollständig auf deiner Hardware läuft. Spiele deine eigene Musikbibliothek, Alben, Künstler und Radiosender ab, setze Hörbücher dort fort, wo du aufgehört hast, hör Bibelverse aus deiner Bibel-App (über 500 Übersetzungen), höre deine eigenen Predigtaufnahmen, frage nach deinen Predigtmanuskripten — und frage deinen persönlichen LLM alles, fundiert in deinen Sammlungen. Sage: spiel bohemian rhapsody, setze psalmen fort, spiel psalm 23, spiel die predigt über gnade, was hat die predigt über gnade zum empfangen gesagt, oder frage mein orion etwas.",
+          "description": "Aria ist ein persönlicher Sprachassistent, der vollständig auf deiner Hardware läuft. Spiele deine eigene Musikbibliothek, Alben, Künstler und Radiosender ab, setze Hörbücher dort fort, wo du aufgehört hast, hör Bibelverse aus deiner Bibel-App (über 500 Übersetzungen), höre deine eigenen Predigtaufnahmen, frage nach deinen Predigtmanuskripten — und frage deinen persönlichen LLM alles, fundiert in deinen Sammlungen. Sage: spiel bohemian rhapsody, setze psalmen fort, spiel psalm 23, spiel die predigt über gnade, was hat die predigt über gnade zum empfangen gesagt, oder frage mein aria etwas.",
           "smallIconUri": "https://aria.eisler-systems.de/skill-icons/icon-108.png",
           "largeIconUri": "https://aria.eisler-systems.de/skill-icons/icon-512.png"
         }

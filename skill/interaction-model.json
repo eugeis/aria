@@ -1,7 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
-      "invocationName": "my orion",
+      "invocationName": "my aria",
       "intents": [
         {
           "name": "PlayMusicIntent",

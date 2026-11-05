@@ -20,7 +20,7 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
         // invocation + command routing is unreliable (first-party skills
         // out-prioritize the custom skill for compound utterances), but
         // WITHIN an active session the utterance is matched against OUR
-        // model first. So the working pattern is: "Alexa, mein orion" →
+        // model first. So the working pattern is: "Alexa, mein aria" →
         // (Bereit) → "spiel queen" / "zufall" / "was sagt psalm 23".
         // The reprompt is spoken after a few seconds of silence.
         IntentKind::Launch => ResponseBuilder::new()
@@ -92,7 +92,7 @@ pub async fn handle_alexa(state: &Arc<AppState>, env: Envelope) -> Response {
         IntentKind::Ask { utterance } => handle_agent_turn(state, &device, &utterance).await,
         IntentKind::Fallback { utterance } => match utterance {
             Some(u) => {
-                // Play-like fallback: "mein orion, spiel X" can arrive here
+                // Play-like fallback: "mein aria, spiel X" can arrive here
                 // when the PlayMusicIntent match loses confidence to the
                 // transcript. Route it to the REAL play path instead of
                 // letting the RAG LLM talk about the track.
@@ -149,14 +149,15 @@ async fn handle_agent_turn(state: &Arc<AppState>, device: &str, utterance: &str)
 
 /// Play-like prefixes a Fallback transcript can carry ("spiel X",
 /// "spiele X", "mach X an", "leg X auf") — returns the remaining query.
-/// The transcript may still carry the invocation name ("mein orion …"),
+/// The transcript may still carry the invocation name ("mein aria …"),
 /// which is stripped first.
 fn strip_play_prefix(u: &str) -> Option<String> {
     let mut s = u.trim();
     let l = s.to_lowercase();
-    // Both the current and the previous invocation phrase — the transcript
-    // carries whichever the console model still has.
-    for inv in ["mein orion", "orion", "mein aria", "aria"] {
+    // Every invocation phrase we have ever shipped — the Fallback transcript
+    // carries whichever the console model still has ("mein orion" was tried
+    // 2026-11 and reverted; both names keep working through the switch).
+    for inv in ["mein aria", "aria", "mein orion", "orion"] {
         if let Some(rest) = l.strip_prefix(inv) {
             s = s[inv.len()..].trim_start();
             let _ = rest;

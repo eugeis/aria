@@ -33,7 +33,7 @@ your own sermons and seminar scripts, and a grounded LLM for everything else.
 
 | You say | What happens |
 |---|---|
-| "Alexa, mein orion, spiel bohemian rhapsody" | Deterministic library resolve (album/artist/genre/fuzzy) → streams the MP3 |
+| "Alexa, mein aria, spiel bohemian rhapsody" | Deterministic library resolve (album/artist/genre/fuzzy) → streams the MP3 |
 | "…play queen" / "…play rock" | Artist / genre queue (shuffle-aware) |
 | "…play psalmen" | The audiobook, from chapter one |
 | "…continue psalmen" | Resumes the device's last chapter + offset |
@@ -46,10 +46,13 @@ your own sermons and seminar scripts, and a grounded LLM for everything else.
 
 > **Honest caveat:** a custom skill cannot take over the built-in
 > "Alexa, spiel X" (that requires being a certified music service). The
-> invocation is **"mein orion …"** (en-US: "my orion …") — Amazon requires
-> at least two words, and the phrase is chosen so the German wake-word
-> recognizer hears it cleanly ("mein aria" kept drifting to "alia" / "ali").
-> Say it first, then the command: "Alexa, mein orion, spiel …" / "…frage: …".
+> invocation is **"mein aria …"** (en-US: "my aria …") — Amazon requires at
+> least two words. Recognition of both "mein aria" and the "mein orion"
+> variant tried in 2026-11 is flaky (the German recognizer drifts to
+> "alia" / "ali" / …), so the practical pattern is: open the skill, then
+> speak the commands **inside the session** ("Alexa, mein aria" → welcome →
+> "spiel … aus meiner sammlung" / "frage …"), where our model wins routing.
+> Skill Model Sensitivity → High in the console further helps.
 
 ## Repository layout (the bible shape)
 
@@ -212,7 +215,7 @@ caveat above). One-time console setup at [developer.amazon.com](https://develope
    (`skill/interaction-model.json`) and de-DE
    (`skill/interaction-model-de-DE.json`). In the console select the
    locale, open the **JSON editor** tab, and paste the matching file
-    (invocation name `mein orion`; PlayMusicIntent + AskIntent + shuffle/repeat/
+    (invocation name `mein aria`; PlayMusicIntent + AskIntent + shuffle/repeat/
     seek + the playback controllers + notifiers + Fallback). If your Echo is
    set to German, the **de-DE** locale is the one that matters — an
    en-US-only skill will not match on a German device.
@@ -240,7 +243,7 @@ caveat above). One-time console setup at [developer.amazon.com](https://develope
    needed for a personal skill; it works on your own account's Echo devices
    immediately. (Publishing to Production is optional and only makes sense
    for other people's accounts.)
- 8. On the Echo: "Alexa, öffne mein orion" or "Alexa, mein orion, spiel …".
+ 8. On the Echo: "Alexa, öffne mein aria" or "Alexa, mein aria, spiel …".
 
 ## Roadmap
 

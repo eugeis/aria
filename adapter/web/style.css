@@ -85,6 +85,12 @@ header {
   cursor: pointer;
 }
 .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* Only the active tab's section is visible (a previous build had NO such
+   rule, so all four sections rendered stacked and clicking a tab looked
+   like it did nothing but move the underline). */
+.tab { display: none; }
+.tab.active { display: block; }
 .count {
   background: var(--accent);
   color: #04121f;
