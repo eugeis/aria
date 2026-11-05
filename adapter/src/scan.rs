@@ -355,9 +355,23 @@ pub async fn reindex(cfg: &Config) -> Result<(), String> {
 
 /// Run one full scan: walk the collections, index the library, build the
 /// metadata records.
+///
+/// Ids are minted through the persistent ID registry (content
+/// fingerprint → id), so a track keeps its id — and the brain keeps its
+/// embedding (ADR 0161) — across moves; only genuinely new files get new
+/// ids. A first-ever scan reproduces the legacy positional ids.
 pub fn scan_library(cfg: &Config) -> Result<(Library, Vec<serde_json::Value>), String> {
     let items = cfg.collection_items()?;
-    let library = Library::scan_collections(&items).map_err(|e| e.to_string())?;
+    let reg_path = cfg.data_dir().join("id-registry.json");
+    let mut registry = aria_audio::IdRegistry::load(&reg_path);
+    let known = registry.map.len();
+    let library = Library::scan_collections_with(&items, &mut registry)
+        .map_err(|e| e.to_string())?;
+    registry.save(&reg_path);
+    let fresh = registry.map.len() - known;
+    if fresh > 0 {
+        eprintln!("id-registry: {fresh} new id(s) minted ({known} known)");
+    }
     let records = build_records(&library, cfg);
     Ok((library, records))
 }

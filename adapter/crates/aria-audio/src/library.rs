@@ -98,6 +98,118 @@ pub struct Track {
     /// Release year, when tagged (music).
     #[serde(default)]
     pub year: String,
+    /// Content fingerprint (FNV-1a over a head/tail sample + the size) —
+    /// the id-registry key, so a track's id survives MOVES (and identical
+    /// copies share it — the dedupe hook). 0 = unreadable at scan time.
+    #[serde(default)]
+    pub fingerprint: u64,
+    /// Twin disambiguator: 0 = the canonical occurrence of the fingerprint
+    /// (scan order); >0 = a same-fingerprint twin, salted by path.
+    #[serde(default)]
+    pub fp_salt: u64,
+}
+
+/// FNV-1a 64 over a content sample: the first 64 KiB + the last 64 KiB +
+/// the file size. Deterministic, dependency-free, ~128 KiB read per file.
+/// (Two different files with identical head, tail AND size is beyond the
+/// resolution we need — the registry's twin salt handles the rest.)
+pub fn fingerprint_file(path: &Path) -> u64 {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut fh) = fs::File::open(path) else {
+        return 0;
+    };
+    let Ok(md) = fh.metadata() else {
+        return 0;
+    };
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut step = |b: &[u8]| {
+        for &x in b {
+            h ^= x as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    let mut buf = [0u8; 65_536];
+    if let Ok(n) = fh.read(&mut buf) {
+        step(&buf[..n]);
+    }
+    let tail_start = md.len().saturating_sub(buf.len() as u64);
+    if tail_start > 0 {
+        if fh.seek(SeekFrom::Start(tail_start)).is_ok() {
+            if let Ok(n) = fh.read(&mut buf) {
+                step(&buf[..n]);
+            }
+        }
+    }
+    step(&(md.len() as u64).to_le_bytes());
+    h
+}
+
+fn fnv1a_str(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in s.as_bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// The persistent track-id registry: content fingerprint → stable id.
+///
+/// This is what makes a reorganization embedding-safe: the knowledge
+/// records are keyed by `trk:{id}`, the id is keyed by the file's CONTENT
+/// (not its path), and the brain's ADR 0161 delta keeps the embedding of
+/// every record whose (slug, text) is unchanged. Move a file → same
+/// fingerprint → same id → same slug → the vector survives.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdRegistry {
+    /// `"fingerprint:salt" → id`.
+    #[serde(default)]
+    pub map: std::collections::BTreeMap<String, u64>,
+    /// The next id to mint (starts at 1 — a fresh registry reproduces the
+    /// legacy positional ids exactly).
+    #[serde(default)]
+    pub next_id: u64,
+}
+
+impl IdRegistry {
+    pub fn load(path: &Path) -> Self {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, path: &Path) {
+        if let Some(dir) = path.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        if let Ok(raw) = serde_json::to_string_pretty(self) {
+            let _ = fs::write(path, raw);
+        }
+    }
+
+    /// Assign stable ids, in place, in the given order (the scan's
+    /// deterministic order). First occurrence of a fingerprint is canonical
+    /// (salt 0); later twins are salted by path so identical copies get
+    /// distinct ids but a shared `fingerprint` (the dedupe group key).
+    pub fn assign(&mut self, tracks: &mut [Track]) {
+        let mut seen: std::collections::BTreeMap<u64, u32> = std::collections::BTreeMap::new();
+        for t in tracks.iter_mut() {
+            let n = seen.entry(t.fingerprint).or_insert(0);
+            *n += 1;
+            t.fp_salt = if *n == 1 { 0 } else { fnv1a_str(&t.path) };
+            let key = format!("{}:{}", t.fingerprint, t.fp_salt);
+            t.id = match self.map.get(&key) {
+                Some(&id) => id,
+                None => {
+                    let id = self.next_id.max(1);
+                    self.next_id = id + 1;
+                    self.map.insert(key, id);
+                    id
+                }
+            };
+        }
+    }
 }
 
 impl Track {
@@ -168,6 +280,18 @@ impl Library {
     /// - `Sermon`: recursive; any audio file is one recording (the title
     ///   fallback strips a leading `YYYY-MM-DD - ` date).
     pub fn scan_collections(items: &[CollectionItem]) -> Result<Self, ScanError> {
+        Self::scan_collections_with(items, &mut IdRegistry::default())
+    }
+
+    /// Scan with the caller's ID registry: a track's id is stable across
+    /// moves/renames (keyed by the content fingerprint), so the record
+    /// slugs, the brain's embeddings, player state and playlist references
+    /// all survive a reorganization. A fresh registry yields ids 1..n in
+    /// scan order — byte-identical to the legacy positional scheme.
+    pub fn scan_collections_with(
+        items: &[CollectionItem],
+        registry: &mut IdRegistry,
+    ) -> Result<Self, ScanError> {
         let mut tracks: Vec<Track> = Vec::new();
         for item in items {
             if !item.path.is_dir() {
@@ -229,6 +353,8 @@ impl Library {
                                 book: book.name.clone(),
                                 chapter_no: None,
                                 year: String::new(),
+                                fingerprint: fingerprint_file(&path),
+                                fp_salt: 0,
                             });
                         }
                     }
@@ -290,9 +416,7 @@ impl Library {
                     &b.title,
                 ))
         });
-        for (i, t) in tracks.iter_mut().enumerate() {
-            t.id = i as u64 + 1;
-        }
+        registry.assign(&mut tracks);
         let playable = tracks.iter().filter(|t| t.playable).count();
         tracing::info!(total = tracks.len(), playable, "collections scanned");
         Ok(Self { tracks })
@@ -534,6 +658,8 @@ fn build_track(
         book: String::new(),
         chapter_no: None,
         year: meta.year,
+        fingerprint: fingerprint_file(path),
+        fp_salt: 0,
     })
 }
 
@@ -767,6 +893,102 @@ mod tests {
         assert_eq!(first.title, "a");
         assert_eq!(first.kind, CollectionKind::Audiobook);
         assert_eq!(first.collection, "bible-audio");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The id-registry is what makes a reorganization embedding-safe:
+    /// ids are keyed by content, so a moved file keeps its id (→ the
+    /// `trk:{id}` record slug → the brain's embedding survives via the
+    /// ADR 0161 delta). A first-ever scan must still reproduce the legacy
+    /// positional ids (the committed e2e sample depends on it).
+    #[test]
+    fn id_registry_stable_across_moves_and_legacy_fresh() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-reg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let music = dir.join("musik");
+        std::fs::create_dir_all(music.join("Queen")).unwrap();
+        let a = music.join("Queen/01 - Bohemian.mp3");
+        let b = music.join("Queen/02 - Radio.mp3");
+        std::fs::write(&a, b"AAA-fake-mp3-content-1111111111").unwrap();
+        std::fs::write(&b, b"BBB-fake-mp3-content-2222222222").unwrap();
+
+        let items = [CollectionItem {
+            name: "musik".into(),
+            kind: CollectionKind::Music,
+            path: music.clone(),
+        }];
+
+        // First-ever scan: legacy positional ids (1, 2 in sort order).
+        let lib1 = Library::scan_collections(&items).unwrap();
+        let by_path1: std::collections::HashMap<String, u64> = lib1
+            .iter()
+            .map(|t| (t.path.clone(), t.id))
+            .collect();
+        let ids1: Vec<u64> = lib1.iter().map(|t| t.id).collect();
+        assert_eq!(ids1, vec![1, 2], "a fresh scan keeps the legacy ids");
+
+        // The registry now knows both fingerprints.
+        let mut reg = IdRegistry::default();
+        reg.assign(&mut lib1.tracks.clone());
+        assert_eq!(reg.map.len(), 2);
+
+        // MOVE both files (a reorganization) — rescan with the registry.
+        std::fs::create_dir_all(music.join("Queen/Remaster")).unwrap();
+        let am = music.join("Queen/Remaster/01 - Bohemian.mp3");
+        let bm = music.join("Queen/Remaster/02 - Radio.mp3");
+        std::fs::rename(&a, &am).unwrap();
+        std::fs::rename(&b, &bm).unwrap();
+        let lib2 = Library::scan_collections_with(&items, &mut reg).unwrap();
+        // The ids follow the CONTENT, not the path:
+        let moved_b: Vec<u64> = lib2
+            .iter()
+            .filter(|t| t.path.ends_with("Bohemian.mp3"))
+            .map(|t| t.id)
+            .collect();
+        let moved_r: Vec<u64> = lib2
+            .iter()
+            .filter(|t| t.path.ends_with("Radio.mp3"))
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(
+            moved_b.iter().copied().collect::<std::collections::HashSet<_>>(),
+            by_path1
+                .iter()
+                .filter(|(p, _)| p.ends_with("Bohemian.mp3"))
+                .map(|(_, id)| *id)
+                .collect::<std::collections::HashSet<_>>(),
+            "the moved file kept its id"
+        );
+        assert_eq!(
+            moved_r.iter().copied().collect::<std::collections::HashSet<_>>(),
+            by_path1
+                .iter()
+                .filter(|(p, _)| p.ends_with("Radio.mp3"))
+                .map(|(_, id)| *id)
+                .collect::<std::collections::HashSet<_>>(),
+            "the other moved file kept its id"
+        );
+
+        // Identical copies (a true duplicate) share the fingerprint but get
+        // distinct ids (twin salt) — the dedupe group key.
+        let c = music.join("Queen/03 - Bohemian (copy).mp3");
+        std::fs::write(&c, std::fs::read(&am).unwrap()).unwrap();
+        let lib3 = Library::scan_collections_with(&items, &mut reg).unwrap();
+        let bohemian = lib3
+            .iter()
+            .filter(|t| t.fingerprint == lib3.iter().find(|t| t.path.ends_with("Bohemian.mp3")).unwrap().fingerprint)
+            .collect::<Vec<_>>();
+        assert_eq!(bohemian.len(), 2, "the twin shares the fingerprint");
+        let ids3: Vec<u64> = bohemian.iter().map(|t| t.id).collect();
+        assert_eq!(ids3.len(), 2);
+        assert_ne!(ids3[0], ids3[1], "…but the twins get distinct ids");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
