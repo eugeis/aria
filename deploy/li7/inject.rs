@@ -250,8 +250,9 @@ const INGRESS_OLD: &str = r#"        paths:
 
 const INGRESS_NEW: &str = r#"        paths:
           # li7 (injected by inject.rs): the aria-ask sidecar owns the Alexa
-          # endpoints AND the web app (the SPA at / + the /dl download API);
-          # the brain keeps its API surface (REST, MCP, docs, health).
+          # endpoints + the /dl download-manager API; the BRAIN owns / and
+          # serves the static web app (tessera `hydration: vanilla`, the
+          # repo's web/ dir embedded in the image) — one origin, split here.
           - path: /alexa
             pathType: Prefix
             backend:
@@ -281,43 +282,23 @@ const INGRESS_NEW: &str = r#"        paths:
                 name: {{ include "aria.fullname" $root }}
                 port:
                   number: 8090
-          # Brain API surface (longest prefix wins in nginx-ingress).
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "aria.fullname" $root }}
-                port:
-                  number: {{ $root.Values.containerPort }}
-          - path: /mcp
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "aria.fullname" $root }}
-                port:
-                  number: {{ $root.Values.containerPort }}
-          - path: /openapi.json
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "aria.fullname" $root }}
-                port:
-                  number: {{ $root.Values.containerPort }}
-          - path: /readyz
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "aria.fullname" $root }}
-                port:
-                  number: {{ $root.Values.containerPort }}
-          # The web app (the aria-ask sidecar serves the SPA at /).
-          - path: /
+          # The download manager's REST API (the SPA calls it same-origin).
+          - path: /dl
             pathType: Prefix
             backend:
               service:
                 name: {{ include "aria.fullname" $root }}
                 port:
                   number: 8090
+          # Everything else — the SPA at /, /api, /mcp, /openapi.json,
+          # /readyz — is the brain.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "aria.fullname" $root }}
+                port:
+                  number: {{ $root.Values.containerPort }}
  "#;
 
 /// Replace the first occurrence of `old` with `new` (the python injector

@@ -1,7 +1,8 @@
-//! The Aria web app: a browser UI + REST API for downloading YouTube audio
-//! into the local library.
+//! The download manager API: the browser UI for downloading YouTube audio
+//! into the local library. (The SPA itself lives in the repo's `web/` dir
+//! and is served by the BRAIN — tessera `hydration: vanilla` — same origin,
+//! split at the ingress; this module keeps only the `/dl/*` surface.)
 //!
-//!   * static SPA at `/` (embedded, no separate container)
 //!   * `/dl/cookies`  — the user's YouTube session (Netscape cookies.txt,
 //!                      exported from their browser with a cookies extension)
 //!   * `/dl/search` + `/dl/playlist` — yt-dlp flat lookups
@@ -32,46 +33,6 @@ use crate::state::AppState;
 const COOKIE_NAME: &str = "ariadltoken";
 const YTDLP_TIMEOUT_SECS: u64 = 120;
 const MAX_COOKIE_UPLOAD: usize = 1_048_576;
-
-const INDEX_HTML: &str = include_str!("../web/index.html");
-const APP_JS: &str = include_str!("../web/app.js");
-const STYLE_CSS: &str = include_str!("../web/style.css");
-const ICON_SVG: &str = include_str!("../web/icon.svg");
-const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
-
-// ---------------------------------------------------------------------------
-// static SPA
-// ---------------------------------------------------------------------------
-
-/// The SPA assets are recompiled into the image — the browser must never
-/// serve a stale copy (no versioned filenames, so no ETag dance).
-fn text(body: &'static str, mime: &'static str) -> Response {
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, mime),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        body.to_string(),
-    )
-        .into_response()
-}
-
-async fn handle_index() -> Response {
-    text(INDEX_HTML, "text/html; charset=utf-8")
-}
-async fn handle_app_js() -> Response {
-    text(APP_JS, "text/javascript; charset=utf-8")
-}
-async fn handle_style_css() -> Response {
-    text(STYLE_CSS, "text/css; charset=utf-8")
-}
-async fn handle_icon() -> Response {
-    text(ICON_SVG, "image/svg+xml")
-}
-async fn handle_manifest() -> Response {
-    text(MANIFEST, "application/manifest+json")
-}
 
 // ---------------------------------------------------------------------------
 // auth — the brain's identity (same as the bible app)
@@ -1270,13 +1231,11 @@ pub async fn rescan_cycle(state: &AppState) -> Option<usize> {
 // router
 // ---------------------------------------------------------------------------
 
+/// The adapter keeps the /dl API + auth exchange only; the SPA itself is
+/// served by the BRAIN (tessera `hydration: vanilla`, the repo's web/ dir)
+/// — same origin, split at the ingress.
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/", get(handle_index))
-        .route("/app.js", get(handle_app_js))
-        .route("/style.css", get(handle_style_css))
-        .route("/icon.svg", get(handle_icon))
-        .route("/manifest.webmanifest", get(handle_manifest))
         .route("/dl/me", get(handle_me))
         .route("/dl/login", post(handle_login))
         .route("/dl/logout", post(handle_logout))

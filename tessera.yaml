@@ -40,6 +40,10 @@ app:
   name: aria
   about: "Aria — personal voice assistant. The brain behind the Alexa ASK surface: the owner's own music / audiobook / sermon collections (RAG over scan-generated metadata), the Bible app (its MCP server), and a grounded LLM for everything else."
   parts: [aria, metrics]
+  # The browser app (Aria Downloads / music manager) is a hand-written static
+  # SPA in ./web — the app lens serves it embedded at / (no Leptos, no wasm).
+  # The /dl REST API stays in the adapter sidecar (same origin via ingress).
+  hydration: vanilla
   # L13: the web /chat assistant routes across the two collections by
   # intent; the voice workflows name their collection explicitly.
   assistant:
