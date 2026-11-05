@@ -142,6 +142,252 @@ $("pp-close").addEventListener("click", () => {
   $("player").classList.add("hidden");
 });
 
+// ── reorganizer (layout moves, dedupe, LLM catalog suggestions) ─────────
+
+let reorgState = { style: "artist-album", plan: null, suggestions: [], accepted: new Set() };
+
+$("reorg-style").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-style]");
+  if (!b) return;
+  reorgState.style = b.dataset.style;
+  document.querySelectorAll("#reorg-style button").forEach((x) => x.classList.remove("active"));
+  b.classList.add("active");
+});
+
+async function loadReorgCollections() {
+  const sel = $("reorg-collection");
+  if (sel.options.length) return;
+  sel.innerHTML = collections.map((c) => `<option>${esc(c)}</option>`).join("");
+}
+
+async function doReorgPlan() {
+  await loadReorgCollections();
+  const col = $("reorg-collection").value;
+  if (!col) return toast("Keine Sammlung konfiguriert", true);
+  const box = $("reorg-summary");
+  box.textContent = "Plane …";
+  let r;
+  try {
+    r = await api(`/dl/reorg/plan?style=${reorgState.style}&collection=${encodeURIComponent(col)}`);
+  } catch (e) {
+    box.textContent = "";
+    return toast(e.message, true);
+  }
+  const p = (r.plans || [])[0];
+  if (!p) return (box.textContent = "Keine Sammlung gefunden.");
+  reorgState.plan = p;
+  reorgState.suggestions = [];
+  reorgState.accepted.clear();
+  const gb = p.move_bytes / 1048576;
+  box.textContent = `${p.kind} · ${p.moves.length} Verschiebungen (${gb.toFixed(1)} MB) · ${p.duplicates.length} Duplikat-Gruppen · ${p.ambiguous.length} Titel mit dünnem Katalog`;
+  const moves = $("reorg-moves");
+  moves.innerHTML = p.moves.length
+    ? p.moves
+        .map(
+          (m) => `
+      <div class="pl-row">
+        <span class="t-no"></span>
+        <span class="t-title" title="${esc(m.from)} → ${esc(m.to)}">${esc(m.title)}</span>
+        <span class="t-meta muted">${esc(m.from)} → <b>${esc(m.to)}</b> · ${esc(m.reason)}</span>
+        <span class="t-dur"></span><span class="t-actions"></span>
+      </div>`
+        )
+        .join("")
+    : `<p class="muted">Alles ist schon im Ziellayout.</p>`;
+  $("reorg-apply").classList.toggle("hidden", p.moves.length === 0 || isReadOnly());
+  renderDupes(p.duplicates);
+  $("reorg-amb-count").textContent = p.ambiguous.length
+    ? `${p.ambiguous.length} Titel ohne sauberen Künstler/Album — LLM-Vorschläge:`
+    : "Katalog sieht vollständig aus.";
+  $("reorg-suggest").disabled = p.ambiguous.length === 0 || isReadOnly();
+  $("reorg-suggests").innerHTML = "";
+  $("reorg-apply-suggest").classList.add("hidden");
+}
+
+function renderDupes(groups) {
+  const box = $("reorg-dupes");
+  if (!groups.length) {
+    box.innerHTML = `<p class="muted">Keine Duplikate.</p>`;
+    return;
+  }
+  box.innerHTML = groups
+    .map(
+      (g, gi) => `
+    <div class="dupe-group">
+      <div class="muted" title="Fingerprint ${g.fingerprint}">Gruppe ${gi + 1} — ${g.tracks.length} identische Dateien:</div>
+      ${g.tracks
+        .map(
+          (t, i) => `
+        <div class="pl-row">
+          <span class="t-no"><input type="radio" name="keep-${gi}" value="${t.track_id}" ${i === 0 ? "checked" : ""} title="Diese behalten"></span>
+          <span class="t-title">${esc(t.title)}</span>
+          <span class="t-meta muted">${esc(t.artist)} · ${esc(t.path)}${i === 0 ? " · <b>behalten</b>" : ""}</span>
+          <span class="t-dur"></span>
+          <span class="t-actions"><button class="act danger" data-dupe-del="${gi}" data-remove="${t.track_id}" title="Diese entfernen (mit den übrigen)">✕</button></span>
+        </div>`
+        )
+        .join("")}
+      <div class="row dup-actions"><button class="ghost danger" data-dupe-apply="${gi}">Duplikate dieser Gruppe entfernen</button></div>
+    </div>`
+    )
+    .join("");
+}
+
+$("reorg-dupes").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-dupe-apply]");
+  if (!b) return;
+  const gi = Number(b.dataset.dupeApply);
+  const g = reorgState.plan?.duplicates[gi];
+  if (!g) return;
+  const keep = document.querySelector(`input[name="keep-${gi}"]:checked`);
+  if (!keep) return toast("Keine Datei als „behalten“ gewählt", true);
+  const remove = g.tracks.filter((t) => String(t.track_id) !== keep.value).map((t) => t.track_id);
+  if (!remove.length) return;
+  if (!confirm(`${remove.length} Datei(en) löschen? (Inhaltlich identisch mit „${g.tracks.find((t) => String(t.track_id) === keep.value)?.title}“)`)) return;
+  try {
+    const r = await api("/dl/reorg/dedupe", { method: "POST", body: JSON.stringify({ keep_id: Number(keep.value), remove_ids: remove }) });
+    toast(`${r.removed} entfernt${r.reindex ? ", Reindex gestartet" : ""}`);
+    await doReorgPlan();
+    loadLibrary();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+$("reorg-plan").addEventListener("click", doReorgPlan);
+
+$("reorg-apply").addEventListener("click", async () => {
+  const p = reorgState.plan;
+  if (!p?.moves.length) return;
+  if (!confirm(`${p.moves.length} Dateien verschieben (${(p.move_bytes / 1048576).toFixed(1)} MB)? IDs und Einbettungen bleiben erhalten.`)) return;
+  $("reorg-apply").disabled = true;
+  try {
+    const r = await api("/dl/reorg/apply", {
+      method: "POST",
+      body: JSON.stringify({ style: reorgState.style, collection: $("reorg-collection").value }),
+    });
+    toast(`${r.moved} verschoben${r.failed?.length ? ` · ${r.failed.length} fehlgeschlagen` : ""}${r.reindex ? ", Reindex gestartet" : ""}`);
+    if (r.failed?.length) console.warn(r.failed);
+    await doReorgPlan();
+    loadLibrary();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    $("reorg-apply").disabled = false;
+  }
+});
+
+$("reorg-suggest").addEventListener("click", async () => {
+  const amb = reorgState.plan?.ambiguous || [];
+  if (!amb.length) return;
+  $("reorg-suggest").disabled = true;
+  $("reorg-amb-count").textContent = `LLM liest ${amb.length} Titel ein (OpenRouter) …`;
+  try {
+    const r = await api("/dl/reorg/suggest", { method: "POST", body: JSON.stringify({ tracks: amb }) });
+    reorgState.suggestions = r.suggestions || [];
+    reorgState.accepted = new Set();
+    renderSuggestions();
+  } catch (err) {
+    $("reorg-amb-count").textContent = `${amb.length} Titel mit dünnem Katalog.`;
+    toast(err.message, true);
+  } finally {
+    $("reorg-suggest").disabled = isReadOnly();
+  }
+});
+
+function renderSuggestions() {
+  const amb = reorgState.plan?.ambiguous || [];
+  const box = $("reorg-suggests");
+  if (!reorgState.suggestions.length) {
+    box.innerHTML = `<p class="muted">Keine Vorschläge erhalten.</p>`;
+    $("reorg-apply-suggest").classList.add("hidden");
+    return;
+  }
+  box.innerHTML = reorgState.suggestions
+    .map((sg) => {
+      const t = amb.find((a) => a.track_id === sg.index) || amb.find((a) => a.index === sg.index) || {};
+      const show = (k) => sg[k] ? `<b>${esc(sg[k])}</b>` : `<span class="muted">${esc(t[k] || "—")}</span>`;
+      return `
+    <div class="pl-row">
+      <span class="t-no"><input type="checkbox" data-sugg-acc="${sg.index}" title="Übernehmen"></span>
+      <span class="t-title">${esc(t.title || sg.title || "?")}</span>
+      <span class="t-meta muted">Künstler: ${show("artist")} · Album: ${show("album")}${sg.reason ? ` · <i>${esc(sg.reason)}</i>` : ""}</span>
+      <span class="t-dur"></span><span class="t-actions"></span>
+    </div>`;
+    }).join("");
+  $("reorg-apply-suggest").classList.toggle("hidden", isReadOnly());
+}
+
+document.addEventListener("change", (e) => {
+  const c = e.target.closest("input[data-sugg-acc]");
+  if (!c) return;
+  const i = c.dataset.suggAcc;
+  if (c.checked) reorgState.accepted.add(i);
+  else reorgState.accepted.delete(i);
+});
+
+$("reorg-apply-suggest").addEventListener("click", async () => {
+  if (!reorgState.accepted.size) return toast("Nichts akzeptiert (Häkchen setzen)", true);
+  const amb = reorgState.plan?.ambiguous || [];
+  const items = [...reorgState.accepted]
+    .map((i) => {
+      const sg = reorgState.suggestions.find((s) => String(s.index) === String(i));
+      const t = amb.find((a) => String(a.track_id) === String(i)) || amb.find((a) => String(a.index) === String(i));
+      if (!sg || !t) return null;
+      return [t.track_id, sg.title || t.title, sg.artist ?? "", sg.album ?? ""];
+    })
+    .filter(Boolean);
+  if (!items.length) return;
+  if (!confirm(`${items.length} Titel neu tagen? (schreibt ID3-Tags, dann Rescan + Reindex)`)) return;
+  try {
+    const r = await api("/dl/reorg/apply-tags", { method: "POST", body: JSON.stringify({ items }) });
+    toast(`${r.tagged} getaggt${r.reindex ? ", Reindex gestartet" : ""}`);
+    reorgState.accepted.clear();
+    renderSuggestions();
+    loadLibrary();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+// ── recent (per-user) ────────────────────────────────────────────────────
+
+async function loadRecent() {
+  const box = $("recent-list");
+  let r;
+  try {
+    r = await api("/dl/recent");
+  } catch {
+    return;
+  }
+  const items = r.items || [];
+  if (!items.length) {
+    box.innerHTML = `<p class="muted">Noch nichts für dich — abgespielte Titel und Downloads erscheinen hier.</p>`;
+    return;
+  }
+  box.innerHTML = items
+    .map(
+      (e) => `
+    <div class="pl-row">
+      <span class="t-no">${e.kind === "download" ? "⬇" : "▶"}</span>
+      <span class="t-title">${esc(e.title)}</span>
+      <span class="t-meta muted">${esc(e.artist || "")} · ${esc(e.at || "")}</span>
+      <span class="t-dur"></span>
+      <span class="t-actions">${e.track_id != null ? `<button class="act" data-recent-play="${e.track_id}" title="Nochmal abspielen">▶</button>` : ""}</span>
+    </div>`
+    )
+    .join("");
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-recent-play]");
+  if (b) playTrackId(Number(b.dataset.recentPlay));
+});
+
+function isReadOnly() {
+  return window.__me && window.__me.role !== "admin";
+}
+
 // ── offline (device cache, the mosaic offline.js helper) ────────────────
 
 let offlineList = JSON.parse(localStorage.getItem("aria-offline") || "[]");
@@ -301,8 +547,13 @@ async function boot() {
     return;
   }
   const u = me.user || {};
-  $("user-badge").textContent = u.name || u.user || "?";
-  $("user-badge").title = `Angemeldet als ${u.user} (${u.role || "?"})`;
+  window.__me = u;
+  const who = u.name || u.user || "?";
+  const scope = [u.user_realm ? `Nutzer ${u.user_realm}` : null, u.tenant ? `Tenant ${u.tenant}` : null]
+    .filter(Boolean)
+    .join(" · ");
+  $("user-badge").textContent = who;
+  $("user-badge").title = `Angemeldet als ${u.user} (${u.role || "?"})${scope ? " — " + scope : ""}`;
   $("user-badge").className = "badge ok";
   $("logout").classList.remove("hidden");
 
@@ -350,6 +601,8 @@ document.querySelectorAll(".tabs button").forEach((b) =>
     $(`tab-${b.dataset.tab}`).classList.add("active");
     if (b.dataset.tab === "queue") refreshQueueNow();
     if (b.dataset.tab === "offline") renderOffline();
+    if (b.dataset.tab === "playlists") loadRecent();
+    if (b.dataset.tab === "reorg") loadReorgCollections();
   })
 );
 
@@ -614,11 +867,12 @@ function renderPlList() {
     box.innerHTML = `<p class="muted">Noch keine Playlists — obene eine anlegen.</p>`;
     return;
   }
+  const admin = window.__me?.role === "admin";
   box.innerHTML = playlistsCache
     .map(
       (p) => `
     <div class="pl-card" data-pl="${p.id}">
-      <div class="pl-card-name">${esc(p.name)}</div>
+      <div class="pl-card-name">${esc(p.name)}${admin && p.owner ? ` <span class="muted">(${esc(p.owner)})</span>` : ""}</div>
       <div class="muted">${p.count} Titel · ${esc(p.updated_at || "")}</div>
       ${p.description ? `<div class="muted pl-card-desc">${esc(p.description)}</div>` : ""}
     </div>`
@@ -797,11 +1051,12 @@ function renderQueue(items) {
       else if (st.status === "failed") statusCell = `<span class="badge err" title="${esc(st.error)}">Fehler</span>`;
       else if (st.status === "cancelled") statusCell = `<span class="muted">Abgebrochen</span>`;
       const active = st.status === "downloading" || st.status === "queued";
+      const admin = window.__me?.role === "admin";
       return `<tr>
         <td class="muted">${it.track ?? n}</td>
         <td class="q-title" title="${esc(it.title)}">${esc(it.title)}</td>
         <td class="muted">${esc(it.artist)}${it.album ? " / " + esc(it.album) : ""}</td>
-        <td class="muted">${esc(it.collection)}</td>
+        <td class="muted">${esc(it.collection)}${admin && it.owner ? ` · <span title="Eigentümer">${esc(it.owner)}</span>` : ""}</td>
         <td>${statusCell}${st.status === "failed" ? `<div class="q-err">${esc(st.error)}</div>` : ""}</td>
         <td class="q-actions">
           ${active ? `<button class="ghost danger" data-act="q-cancel" data-id="${it.id}">Abbrechen</button>` : ""}

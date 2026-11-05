@@ -451,7 +451,9 @@ fn find_radio_by_slug(state: &AppState, slug: &str) -> Option<(String, String)> 
 
 fn not_found_response(q: &str) -> Response {
     ResponseBuilder::new()
-        .say(format!("Leider habe ich {q} nicht in deinen Sammlungen gefunden."))
+        .say(format!(
+            "Leider habe ich {q} nicht in deinen Sammlungen gefunden."
+        ))
         .end_session()
         .build()
 }
@@ -707,7 +709,10 @@ fn handle_play_noquery(state: &Arc<AppState>, device: &str, env: &Envelope) -> R
         Some(first) => {
             {
                 let mut players = state.player();
-                players.entry(device.to_string()).or_default().start_queue(ids);
+                players
+                    .entry(device.to_string())
+                    .or_default()
+                    .start_queue(ids);
             }
             start_file(state, device, first, 0, None)
         }
@@ -1130,11 +1135,17 @@ mod tests {
     #[test]
     fn strip_play_prefix_variants() {
         assert_eq!(strip_play_prefix("spiel queen"), Some("queen".into()));
-        assert_eq!(strip_play_prefix("Spiele den Song Bohemian Rhapsody"), Some("den Song Bohemian Rhapsody".into()));
+        assert_eq!(
+            strip_play_prefix("Spiele den Song Bohemian Rhapsody"),
+            Some("den Song Bohemian Rhapsody".into())
+        );
         assert_eq!(strip_play_prefix("mach rock an"), Some("rock an".into()));
         assert_eq!(strip_play_prefix("leg etwas ein"), Some("etwas ein".into()));
         // Invocation name still in the transcript.
-        assert_eq!(strip_play_prefix("mein orion spiel queen"), Some("queen".into()));
+        assert_eq!(
+            strip_play_prefix("mein orion spiel queen"),
+            Some("queen".into())
+        );
         assert_eq!(strip_play_prefix("aria spiele rock"), Some("rock".into()));
         // Non-play transcripts are left alone (→ the agent turn).
         assert_eq!(strip_play_prefix("frage welche alben habe ich"), None);

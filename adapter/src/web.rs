@@ -4,13 +4,12 @@
 //! split at the ingress; this module keeps only the `/dl/*` surface.)
 //!
 //!   * `/dl/cookies`  — the user's YouTube session (Netscape cookies.txt,
-//!                      exported from their browser with a cookies extension)
+//!     exported from their browser with a cookies extension)
 //!   * `/dl/search` + `/dl/playlist` — yt-dlp flat lookups
 //!   * `/dl/queue`    — a persistent download queue worked by a single
-//!                      background task: yt-dlp → MP3 192k → ID3 tags →
-//!                      the collection's folder layout. When the queue
-//!                      drains, the library is rescanned + the brain
-//!                      reindexed, so new tracks are playable immediately.
+//!     background task: yt-dlp → MP3 192k → ID3 tags → the collection's
+//!     folder layout. When the queue drains, the library is rescanned + the
+//!     brain reindexed, so new tracks are playable immediately.
 //!
 //! Auth: when `server.web_token` (env ARIA_WEB_TOKEN) is set, every `/dl/*`
 //! route (except login) requires the matching cookie.
@@ -20,7 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
 use axum::extract::{Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -58,21 +57,49 @@ const ID_COOKIE: &str = "mosaic_token";
 
 #[derive(Serialize, Clone)]
 pub struct WebUser {
-    sub: String,
-    role: String,
-    name: Option<String>,
-    provider: Option<String>,
+    pub sub: String,
+    pub role: String,
+    pub name: Option<String>,
+    pub provider: Option<String>,
+    /// The tenant realm value (verified claim — ADR 0151), when the token
+    /// carries one. The shared-scope key (the library belongs to it).
+    pub tenant: Option<String>,
+    /// The user realm value — the personal-scope key (playlists, recent).
+    pub user_realm: Option<String>,
 }
 
 impl WebUser {
+    /// The stable personal-scope key: the user realm, else the subject.
+    pub fn user_key(&self) -> String {
+        self.user_realm
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| self.sub.clone())
+    }
+
     fn json(&self) -> Value {
         serde_json::json!({
             "user": self.sub,
             "role": self.role,
             "name": self.name,
             "provider": self.provider,
+            "tenant": self.tenant,
+            "user_realm": self.user_realm,
         })
     }
+}
+
+/// The verified realm claims (ADR 0151: the brain stamps them into the
+/// JWT from the user's declared `realm:` — never from the request).
+fn realm_claims(claims: &Value) -> (Option<String>, Option<String>) {
+    let r = claims.get("realm");
+    let pick = |dim: &str| {
+        r.and_then(|x| x.get(dim))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|v| !v.is_empty())
+    };
+    (pick("tenant"), pick("user"))
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -105,13 +132,17 @@ fn verify_web_token(tok: &str, legacy_token: Option<&str>) -> Option<WebUser> {
     let t = tok.trim();
     // Legacy single token (dev fallback: only when no JWT secret is set).
     if legacy_token.is_some_and(|w| !w.is_empty() && t == w)
-        && std::env::var(JWT_SECRET_ENV).map(|s| s.is_empty()).unwrap_or(true)
+        && std::env::var(JWT_SECRET_ENV)
+            .map(|s| s.is_empty())
+            .unwrap_or(true)
     {
         return Some(WebUser {
             sub: "token".into(),
             role: "admin".into(),
             name: None,
             provider: Some("token".into()),
+            tenant: None,
+            user_realm: None,
         });
     }
     // Local brain JWT (HS256, shared secret).
@@ -124,6 +155,7 @@ fn verify_web_token(tok: &str, legacy_token: Option<&str>) -> Option<WebUser> {
             jsonwebtoken::decode::<Value>(t, &DecodingKey::from_secret(secret.as_bytes()), &v)
         {
             let sub = d.claims.get("sub")?.as_str()?.to_string();
+            let (tenant, user_realm) = realm_claims(&d.claims);
             return Some(WebUser {
                 role: d
                     .claims
@@ -131,21 +163,24 @@ fn verify_web_token(tok: &str, legacy_token: Option<&str>) -> Option<WebUser> {
                     .and_then(|r| r.as_str())
                     .unwrap_or("user")
                     .to_string(),
-                name: d.claims.get("name").and_then(|n| n.as_str()).map(String::from),
+                name: d
+                    .claims
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(String::from),
                 provider: d
                     .claims
                     .get("provider")
                     .and_then(|p| p.as_str())
                     .map(String::from),
+                tenant,
+                user_realm,
                 sub,
             });
         }
     }
     // OIDC IdP id_token (RS256) — the SSO path (ADR 0150).
-    if let (Ok(pem), Ok(issuer)) = (
-        std::env::var(OIDC_PEM_ENV),
-        std::env::var(OIDC_ISSUER_ENV),
-    ) {
+    if let (Ok(pem), Ok(issuer)) = (std::env::var(OIDC_PEM_ENV), std::env::var(OIDC_ISSUER_ENV)) {
         if !pem.is_empty() && !issuer.is_empty() {
             use jsonwebtoken::{Algorithm, DecodingKey, Validation};
             if let Ok(key) = DecodingKey::from_rsa_pem(pem.as_bytes()) {
@@ -158,6 +193,7 @@ fn verify_web_token(tok: &str, legacy_token: Option<&str>) -> Option<WebUser> {
                 }
                 if let Ok(d) = jsonwebtoken::decode::<Value>(t, &key, &v) {
                     let sub = d.claims.get("sub")?.as_str()?.to_string();
+                    let (tenant, user_realm) = realm_claims(&d.claims);
                     return Some(WebUser {
                         role: d
                             .claims
@@ -165,13 +201,19 @@ fn verify_web_token(tok: &str, legacy_token: Option<&str>) -> Option<WebUser> {
                             .and_then(|r| r.as_str())
                             .unwrap_or("user")
                             .to_string(),
-                        name: d.claims.get("name").and_then(|n| n.as_str()).map(String::from),
+                        name: d
+                            .claims
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .map(String::from),
                         provider: d
                             .claims
                             .get("provider")
                             .and_then(|p| p.as_str())
                             .map(String::from)
                             .or_else(|| Some("oidc".into())),
+                        tenant,
+                        user_realm,
                         sub,
                     });
                 }
@@ -190,23 +232,26 @@ pub fn authorized(cfg: &Config, headers: &HeaderMap) -> Option<WebUser> {
         .map(|s| !s.is_empty())
         .unwrap_or(false)
         || legacy.is_some_and(|s| !s.is_empty())
-        || std::env::var(OIDC_PEM_ENV).map(|s| !s.is_empty()).unwrap_or(false)
-            && std::env::var(OIDC_ISSUER_ENV).map(|s| !s.is_empty()).unwrap_or(false);
+        || std::env::var(OIDC_PEM_ENV)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+            && std::env::var(OIDC_ISSUER_ENV)
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
     if !any_auth_configured {
         return Some(WebUser {
             sub: "anonymous".into(),
             role: "admin".into(),
             name: None,
             provider: Some("dev-open".into()),
+            tenant: None,
+            user_realm: None,
         });
     }
     presented_token(headers).and_then(|t| verify_web_token(&t, legacy))
 }
 
-async fn handle_me(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Json<Value> {
+async fn handle_me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Json<Value> {
     match authorized(&state.cfg, &headers) {
         Some(u) => Json(serde_json::json!({ "ok": true, "user": u.json() })),
         None => Json(serde_json::json!({ "ok": false, "auth_required": true })),
@@ -221,10 +266,7 @@ struct LoginBody {
 /// Exchange a verified brain JWT for the identity cookie. The SPA obtains
 /// the token from the BRAIN's /api/auth/login (username/password) — we only
 /// re-verify it, so there is exactly one credential system (the app's).
-async fn handle_login(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<LoginBody>,
-) -> Response {
+async fn handle_login(State(state): State<Arc<AppState>>, Json(body): Json<LoginBody>) -> Response {
     match verify_web_token(body.token.trim(), state.cfg.server.web_token.as_deref()) {
         Some(u) => {
             let cookie = format!(
@@ -249,18 +291,28 @@ async fn handle_login(
 }
 
 async fn handle_logout() -> Response {
-    let mut cookies = vec![format!("{ID_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")];
-    cookies.push(format!("{COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"));
+    let mut cookies = vec![format!(
+        "{ID_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+    )];
+    cookies.push(format!(
+        "{COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+    ));
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, cookies[0].clone()), (header::SET_COOKIE, cookies[1].clone())],
+        [
+            (header::SET_COOKIE, cookies[0].clone()),
+            (header::SET_COOKIE, cookies[1].clone()),
+        ],
         Json(serde_json::json!({"ok": true})),
     )
         .into_response()
 }
 
 pub fn denied() -> Response {
-    (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok": false, "error": "not authorized"})))
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({"ok": false, "error": "not authorized"})),
+    )
         .into_response()
 }
 
@@ -284,7 +336,7 @@ struct CookiesStatus {
     youtube_lines: usize,
 }
 
-fn fmt_time(t: SystemTime) -> String {
+pub fn fmt_time(t: SystemTime) -> String {
     let secs = t
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -307,7 +359,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let mp = (5 * doy + 2) / 153;
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    ((if m <= 2 { y + 1 } else { y }) as i64, m, d)
+    ((if m <= 2 { y + 1 } else { y }), m, d)
 }
 
 async fn handle_cookies_get(State(state): State<Arc<AppState>>) -> Json<CookiesStatus> {
@@ -386,8 +438,7 @@ async fn handle_cookies_post(
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
     }
-    Json(serde_json::json!({"ok": true, "path": p.to_string_lossy().into_owned()}))
-        .into_response()
+    Json(serde_json::json!({"ok": true, "path": p.to_string_lossy().into_owned()})).into_response()
 }
 
 async fn handle_cookies_delete(State(state): State<Arc<AppState>>) -> Response {
@@ -441,7 +492,7 @@ fn hits_from_entries(v: &Value) -> Vec<Hit> {
         Some(e) => e,
         None => return vec![entry_to_hit(v)],
     };
-    entries.iter().filter_map(|e| entry_to_hit_opt(e)).collect()
+    entries.iter().filter_map(entry_to_hit_opt).collect()
 }
 
 fn entry_to_hit(v: &Value) -> Hit {
@@ -535,7 +586,7 @@ async fn handle_search(
             "title": v.get("title").and_then(|t| t.as_str()).unwrap_or(&query),
             "hits": hits_from_entries(&v),
         }))
-            .into_response(),
+        .into_response(),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({"ok": false, "error": e})),
@@ -620,6 +671,15 @@ pub struct DlItem {
     pub track: Option<u32>,
     pub status: DlStatus,
     pub added_at: String,
+    /// The requesting user (the personal-scope owner); the download still
+    /// lands in the SHARED tenant library. Default "admin" for the
+    /// pre-multi-user queue files.
+    #[serde(default = "default_owner")]
+    pub owner: String,
+}
+
+fn default_owner() -> String {
+    "admin".to_string()
 }
 
 pub struct DlQueue {
@@ -756,13 +816,16 @@ impl DlQueue {
         true
     }
 
-    pub fn clear_finished(&self) -> usize {
+    /// Remove finished items — the caller's own, or (admin) all of them.
+    pub fn clear_finished(&self, owner: &str, all: bool) -> usize {
         let mut items = self.lock();
         let before = items.len();
-        items.retain(|i| !matches!(
-            i.status,
-            DlStatus::Done { .. } | DlStatus::Failed { .. } | DlStatus::Cancelled
-        ));
+        items.retain(|i| {
+            !(matches!(
+                i.status,
+                DlStatus::Done { .. } | DlStatus::Failed { .. } | DlStatus::Cancelled
+            ) && (all || i.owner == owner))
+        });
         let n = before - items.len();
         if n > 0 {
             self.save_unlocked(&items);
@@ -796,17 +859,35 @@ struct QueueAddItem {
     track: Option<u32>,
 }
 
-async fn handle_queue_get(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Response {
+async fn handle_queue_get(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if authorized(&state.cfg, &headers).is_none() {
         return denied();
     }
-    let collections: Vec<String> = state.cfg.collections.items.iter().map(|i| i.name.clone()).collect();
+    let Some(u) = authorized(&state.cfg, &headers) else {
+        return denied();
+    };
+    let collections: Vec<String> = state
+        .cfg
+        .collections
+        .items
+        .iter()
+        .map(|i| i.name.clone())
+        .collect();
+    // Personal scope: a user sees their own queue; admin sees everything
+    // (the shared tenant library is still the download TARGET for all).
+    let items = if u.role == "admin" {
+        state.dl_queue.snapshot()
+    } else {
+        state
+            .dl_queue
+            .snapshot()
+            .into_iter()
+            .filter(|i| i.owner == u.user_key())
+            .collect()
+    };
     Json(serde_json::json!({
         "ok": true,
-        "items": state.dl_queue.snapshot(),
+        "items": items,
         "collections": collections,
     }))
     .into_response()
@@ -817,14 +898,24 @@ async fn handle_queue_add(
     headers: HeaderMap,
     Json(body): Json<QueueAddBody>,
 ) -> Response {
-    if authorized(&state.cfg, &headers).is_none() {
-        return denied();
-    }
-    let known: Vec<String> = state.cfg.collections.items.iter().map(|i| i.name.clone()).collect();
+    let u = match authorized(&state.cfg, &headers) {
+        Some(u) => u,
+        None => return denied(),
+    };
+    let known: Vec<String> = state
+        .cfg
+        .collections
+        .items
+        .iter()
+        .map(|i| i.name.clone())
+        .collect();
     let mut out: Vec<DlItem> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for (i, item) in body.items.iter().enumerate() {
-        let col = match known.iter().find(|n| n.eq_ignore_ascii_case(&item.collection)) {
+        let col = match known
+            .iter()
+            .find(|n| n.eq_ignore_ascii_case(&item.collection))
+        {
             Some(c) => c.clone(),
             None => {
                 errors.push(format!(
@@ -865,6 +956,7 @@ async fn handle_queue_add(
             track: item.track,
             status: DlStatus::Queued,
             added_at: fmt_time(SystemTime::now()),
+            owner: u.user_key(),
         });
     }
     if out.is_empty() && !errors.is_empty() {
@@ -879,14 +971,23 @@ async fn handle_queue_add(
         .into_response()
 }
 
-fn queue_item_op(
-    state: &Arc<AppState>,
-    headers: &HeaderMap,
-    id: &str,
-    op: &str,
-) -> Response {
-    if authorized(&state.cfg, headers).is_none() {
+fn queue_item_op(state: &Arc<AppState>, headers: &HeaderMap, id: &str, op: &str) -> Response {
+    let Some(u) = authorized(&state.cfg, headers) else {
         return denied();
+    };
+    // Owner scope: the item is yours or you are the admin.
+    let allowed = state
+        .dl_queue
+        .snapshot()
+        .iter()
+        .find(|i| i.id == id)
+        .is_some_and(|i| i.owner == u.user_key() || u.role == "admin");
+    if !allowed {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"ok": false, "error": "not your queue item"})),
+        )
+            .into_response();
     }
     let ok = match op {
         "cancel" => state.dl_queue.request_cancel(id),
@@ -924,11 +1025,85 @@ async fn handle_queue_clear_done(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Response {
-    if authorized(&state.cfg, &headers).is_none() {
+    let Some(u) = authorized(&state.cfg, &headers) else {
         return denied();
-    }
-    let n = state.dl_queue.clear_finished();
+    };
+    let n = state
+        .dl_queue
+        .clear_finished(&u.user_key(), u.role == "admin");
     Json(serde_json::json!({"ok": true, "removed": n})).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// recent (the per-user personal scope: last played / downloaded)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RecentItem {
+    pub title: String,
+    #[serde(default)]
+    pub artist: String,
+    /// "play" (a library stream) | "download" (a finished yt-dlp item).
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub track_id: Option<u64>,
+    #[serde(default)]
+    pub path: Option<String>,
+    pub at: String,
+}
+
+/// Per-user recent list (the `user` realm scope — the counterweight to the
+/// tenant-scoped shared library). Cap 20 per user; a repeated entry moves
+/// it to the front.
+pub struct RecentStore {
+    map: Mutex<std::collections::BTreeMap<String, Vec<RecentItem>>>,
+    file: PathBuf,
+}
+
+const RECENT_CAP: usize = 20;
+
+impl RecentStore {
+    pub fn load(cfg: &Config) -> Arc<Self> {
+        let file = cfg.data_dir().join("recent.json");
+        let map: std::collections::BTreeMap<String, Vec<RecentItem>> =
+            std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+        Arc::new(Self {
+            map: Mutex::new(map),
+            file,
+        })
+    }
+
+    fn lock(&self) -> MutexGuard<'_, std::collections::BTreeMap<String, Vec<RecentItem>>> {
+        self.map.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn record(&self, user_key: &str, item: RecentItem) {
+        let mut m = self.lock();
+        let v = m.entry(user_key.to_string()).or_default();
+        // A repeat (same kind + title) moves to the front instead of duping.
+        v.retain(|e| !(e.kind == item.kind && e.title == item.title));
+        v.insert(0, item);
+        v.truncate(RECENT_CAP);
+        if let Ok(raw) = serde_json::to_string_pretty(&*m) {
+            let _ = std::fs::write(&self.file, raw);
+        }
+    }
+
+    pub fn get(&self, user_key: &str) -> Vec<RecentItem> {
+        self.lock().get(user_key).cloned().unwrap_or_default()
+    }
+}
+
+/// GET /dl/recent — the caller's own recent list (user scope).
+async fn handle_recent(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let Some(u) = authorized(&state.cfg, &headers) else {
+        return denied();
+    };
+    Json(serde_json::json!({"ok": true, "items": state.recent.get(&u.user_key())})).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -991,7 +1166,7 @@ async fn run_one(state: &AppState, item: &DlItem) {
         None => {
             return mark(DlStatus::Failed {
                 error: format!("collection '{}' not in the adapter config", item.collection),
-            })
+            });
         }
     };
     let artist_dir = slug_dir(&item.artist);
@@ -1032,7 +1207,11 @@ async fn run_one(state: &AppState, item: &DlItem) {
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return mark(DlStatus::Failed { error: format!("spawn: {e}") }),
+        Err(e) => {
+            return mark(DlStatus::Failed {
+                error: format!("spawn: {e}"),
+            });
+        }
     };
     use tokio::io::{AsyncBufReadExt as _, BufReader};
     let stderr = child.stderr.take().expect("piped");
@@ -1041,7 +1220,12 @@ async fn run_one(state: &AppState, item: &DlItem) {
     let mut line_buf = String::new();
     loop {
         line_buf.clear();
-        if reader.read_line(&mut line_buf).await.map(|n| n == 0).unwrap_or(true) {
+        if reader
+            .read_line(&mut line_buf)
+            .await
+            .map(|n| n == 0)
+            .unwrap_or(true)
+        {
             break;
         }
         let l = line_buf.trim_end();
@@ -1065,21 +1249,34 @@ async fn run_one(state: &AppState, item: &DlItem) {
             let _ = child.start_kill();
             let _ = child.wait().await;
             cleanup_partials(&out_dir);
-            q.clear_cancel(&item.id);
+            q.clear_cancel(item.id.as_str());
             return mark(DlStatus::Cancelled);
         }
     }
     let status = child.wait().await;
     match status {
         Ok(s) if s.success() => {
-            q.clear_cancel(&item.id);
-            finalize(&out_dir, &track_prefix, &item).await;
-            mark(DlStatus::Done {
-                path: out_dir.join(format!("{track_prefix}{}.mp3", clean_title(&item.title))).to_string_lossy().into_owned(),
-            });
+            q.clear_cancel(item.id.as_str());
+            finalize(&out_dir, &track_prefix, item).await;
+            let path = out_dir
+                .join(format!("{track_prefix}{}.mp3", clean_title(&item.title)))
+                .to_string_lossy()
+                .into_owned();
+            state.recent.record(
+                &item.owner,
+                RecentItem {
+                    title: item.title.clone(),
+                    artist: item.artist.clone(),
+                    kind: "download".into(),
+                    track_id: None,
+                    path: Some(path.clone()),
+                    at: fmt_time(SystemTime::now()),
+                },
+            );
+            mark(DlStatus::Done { path });
         }
         Ok(s) => {
-            q.clear_cancel(&item.id);
+            q.clear_cancel(item.id.as_str());
             cleanup_partials(&out_dir);
             let tail = if last_err.is_empty() {
                 format!("exit {s}")
@@ -1089,8 +1286,10 @@ async fn run_one(state: &AppState, item: &DlItem) {
             mark(DlStatus::Failed { error: tail });
         }
         Err(e) => {
-            q.clear_cancel(&item.id);
-            mark(DlStatus::Failed { error: format!("wait: {e}") });
+            q.clear_cancel(item.id.as_str());
+            mark(DlStatus::Failed {
+                error: format!("wait: {e}"),
+            });
         }
     }
 }
@@ -1117,14 +1316,11 @@ async fn finalize(out_dir: &Path, track_prefix: &str, item: &DlItem) {
             }
         }
     }
-    let Some(src) = dropped
-        .into_iter()
-        .max_by_key(|p| {
-            p.metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH)
-        })
-    else {
+    let Some(src) = dropped.into_iter().max_by_key(|p| {
+        p.metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    }) else {
         return;
     };
     let final_name = format!("{track_prefix}{}.mp3", clean_title(&item.title));
@@ -1148,8 +1344,7 @@ async fn finalize(out_dir: &Path, track_prefix: &str, item: &DlItem) {
     if !item.album.is_empty() {
         ff.arg("-metadata").arg(format!("album={}", item.album));
     }
-    ff.arg("-metadata")
-        .arg(format!("title={}", item.title));
+    ff.arg("-metadata").arg(format!("title={}", item.title));
     if let Some(t) = item.track {
         ff.arg("-metadata").arg(format!("track={t}"));
     }
@@ -1211,11 +1406,13 @@ pub async fn rescan_cycle(state: &AppState) -> Option<usize> {
     let (lib, records) = scanned;
     let n = lib.len();
     let cfg = &state.cfg;
-    match crate::scan::publish_if_nonempty(&cfg, &lib, &records) {
+    match crate::scan::publish_if_nonempty(cfg, &lib, &records) {
         Ok(Some(true)) => {
             if !cfg.brain.mock {
-                match crate::scan::reindex(&cfg).await {
-                    Ok(()) => tracing::info!(records = records.len(), "post-download reindex requested"),
+                match crate::scan::reindex(cfg).await {
+                    Ok(()) => {
+                        tracing::info!(records = records.len(), "post-download reindex requested")
+                    }
                     Err(e) => tracing::warn!(%e, "post-download reindex failed"),
                 }
             }
@@ -1239,11 +1436,17 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dl/me", get(handle_me))
         .route("/dl/login", post(handle_login))
         .route("/dl/logout", post(handle_logout))
-        .route("/dl/cookies", get(handle_cookies_get).post(handle_cookies_post).delete(handle_cookies_delete))
+        .route(
+            "/dl/cookies",
+            get(handle_cookies_get)
+                .post(handle_cookies_post)
+                .delete(handle_cookies_delete),
+        )
         .route("/dl/search", get(handle_search))
         .route("/dl/playlist", get(handle_playlist))
         .route("/dl/queue", get(handle_queue_get).post(handle_queue_add))
         .route("/dl/queue/clear-done", post(handle_queue_clear_done))
         .route("/dl/queue/{id}/cancel", post(handle_queue_cancel))
         .route("/dl/queue/{id}", delete(handle_queue_remove))
+        .route("/dl/recent", get(handle_recent))
 }

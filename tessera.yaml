@@ -59,6 +59,32 @@ app:
     enabled: true
     identifier: de.eisler.aria
     targets: [macos, linux, windows]
+  # Multi-tenancy (the first committed Mosaic realm app — ADR 0151's
+  # "no committed example declares realms" gap closes here): the scope
+  # spec lives AT THE APP LEVEL (the EE model — applied to the part
+  # instances, not hardcoded in them).
+  #   tenant: the shared scope — the real files/folders (the /media tree,
+  #           the knowledge collections, the download queue's TARGETS).
+  #           root + global + seeded: every principal of this deployment
+  #           operates inside tenant `aria` unless its verified identity
+  #           says otherwise (ADR 0151: never from the request).
+  #   user:   the personal scope — playlists, recent, per-user state.
+  #           parent: tenant → a user always belongs to a tenant.
+  # The IAM resource flag makes the tenant value grantable (per-tenant
+  # admins are the multi-tenant follow-up; today: one seeded tenant).
+  realms:
+    tenant:
+      root: true
+      global: true
+      iam_resource: true
+      label: Tenant
+      seed:
+        id: aria
+        name: "Aria"
+        slug: aria
+    user:
+      parent: tenant
+      label: User
   # L13: the web /chat assistant routes across the two collections by
   # intent; the voice workflows name their collection explicitly.
   assistant:
@@ -77,6 +103,9 @@ app:
     # a missing secret fails the affected surface soft, never the pod.
     MOAIC_JWT_SECRET: { secret: true }
     MOAIC_ADMIN_PASSWORD: { secret: true }
+    # The second household user (realm tenant:aria / user:anna — the
+    # multi-user test principal; own playlists/recent, the shared library).
+    MOAIC_ANNA_PASSWORD: { secret: true }
     # The ASK adapter sidecar's credential (editor: runs the ask /
     # resolve-play workflows + POSTs /api/ops/reindex after a scan).
     MOAIC_ADAPTER_TOKEN: { secret: true }
@@ -167,12 +196,20 @@ identity:
       about: "The app operator (ops, reindex, sources, the web chat lens)."
       role: admin
       password_env: MOAIC_ADMIN_PASSWORD
-      realm: { user: admin }
+      realm: { tenant: aria, user: admin }
+    anna:
+      about: "The second household member — the multi-user test principal: own playlists/recent, the shared tenant library."
+      role: editor
+      password_env: MOAIC_ANNA_PASSWORD
+      realm: { tenant: aria, user: anna }
   service_accounts:
     adapter:
       about: "The ASK adapter sidecar (same pod, loopback): runs the `ask` + `resolve-play` workflows (the `update` action on `app`) and POSTs /api/ops/reindex after a library scan. Editor — no admin, no user writes."
       role: editor
       token_env: MOAIC_ADAPTER_TOKEN
+      # Tenant-scoped (no user dim — it is not a person): the sidecar's
+      # workflow runs see the whole tenant's knowledge, ADR 0151-verified.
+      realm: { tenant: aria }
 
 # ---- the two knowledge collections ----------------------------------------
 vector_dbs:
@@ -608,3 +645,63 @@ workflows:
       - { from: start_1, to: find }
       - { from: find, to: decide }
       - { from: decide, to: end_1 }
+
+  # The reorg feature's LLM assist: the adapter hands over the AMBIGUOUS
+  # tracks (missing/messy artist/album/title — ripped CDs, sermon files,
+  # downloads without tags) and gets normalized catalog suggestions back.
+  # The user reviews + applies them in the web UI (the LLM never touches
+  # the files itself). OpenRouter (chat) — one structured call per batch.
+  - name: reorg-suggest
+    about: "Catalog suggestions for ambiguous library tracks: normalized artist/album/title (+ collection for sermons) from the file name, tags and context. Output: {suggestions: [{index, artist, album, title, collection, reason}]} — only the fields worth changing."
+    nodes:
+      - type: start
+        id: start_1
+        props:
+          title: Start
+          variables:
+            - name: tracks
+              ty: String
+              about: "JSON array of ambiguous tracks: {index, title, artist, album, collection, kind, file, duration_ms}."
+      - type: llm
+        id: suggest
+        props:
+          title: Suggest normalized catalog data
+          model:
+            model: chat
+        json_schema: '{"type": "object", "properties": {"suggestions": {"type": "array", "items": {"type": "object", "properties": {"index": {"type": "number"}, "artist": {"type": "string"}, "album": {"type": "string"}, "title": {"type": "string"}, "collection": {"type": "string"}, "reason": {"type": "string"}}, "required": ["index", "reason"]}}}, "required": ["suggestions"]}'
+        prompt:
+          - role: system
+            content: |
+              You are the cataloguer of a personal media library (music,
+              audiobooks, German sermon/seminar recordings). You receive a
+              batch of tracks whose metadata is missing or messy (empty
+              artist/album, file-name titles with dates or numbering,
+              mis-grouped series). For EACH track, suggest the normalized
+              values — but ONLY for fields that actually need fixing:
+              * artist: the performing artist / the speaker (sermons) / the
+                narrator (audiobooks). Empty when genuinely unknown.
+              * album: the album; for sermons/seminars the SERIES name
+                (the folder usually already tells you).
+              * title: the clean spoken title (drop file numbering like
+                "01 - " and date prefixes like "2019-05-12 - " — keep the
+                rest verbatim, do NOT translate).
+              * collection: only when you are confident the track belongs
+                to a DIFFERENT collection than the one given.
+              * reason: one short clause (German) why you changed it.
+              Derive from the file name, the folder, the duration and the
+              sibling tracks in the batch (they share series conventions).
+              Never invent facts you cannot infer; an empty string means
+              "leave as is". Respond with JSON only.
+          - role: user
+            content: "Tracks:\n{{tracks}}"
+      - type: end
+        id: end_1
+        props:
+          title: End
+          outputs:
+            - name: suggestions
+              ty: String
+              default: "suggest.output.suggestions"
+    edges:
+      - { from: start_1, to: suggest }
+      - { from: suggest, to: end_1 }

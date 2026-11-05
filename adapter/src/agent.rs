@@ -5,6 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::config::Config;
@@ -54,6 +55,15 @@ pub trait AgentBackend: Send + Sync {
         query: &str,
         timeout: Duration,
     ) -> BoxFuture<'_, Result<ResolveOutcome, AgentError>>;
+    /// Reorg LLM assist: normalized catalog suggestions for the given
+    /// ambiguous tracks (the brain's `reorg-suggest` workflow, OpenRouter).
+    /// `tracks_json` is a JSON array; the result is the workflow's
+    /// `suggestions` output serialized as JSON.
+    fn reorg_suggest(
+        &self,
+        tracks_json: &str,
+        timeout: Duration,
+    ) -> BoxFuture<'_, Result<String, AgentError>>;
 }
 
 /// Real backend: the Aria Mosaic app over its REST API (loopback in-pod).
@@ -340,6 +350,47 @@ impl AgentBackend for BrainAgent {
             })
         })
     }
+
+    fn reorg_suggest(
+        &self,
+        tracks_json: &str,
+        _timeout: Duration,
+    ) -> BoxFuture<'_, Result<String, AgentError>> {
+        let tracks_json = tracks_json.to_string();
+        let http = self.http.clone();
+        let base = self.base.clone();
+        let token = self.token.clone();
+        Box::pin(async move {
+            let mut req = http
+                .post(format!("{base}/api/workflows/reorg-suggest/run"))
+                .json(&serde_json::json!({ "tracks": tracks_json }));
+            if !token.is_empty() {
+                req = req.bearer_auth(token);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| AgentError::Connect(e.to_string()))?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(AgentError::Other(format!("{status}: {body}")));
+            }
+            let v: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| AgentError::Other(e.to_string()))?;
+            // The end output (an array, or a JSON string of one).
+            let s = v
+                .get("suggestions")
+                .cloned()
+                .unwrap_or(Value::Array(vec![]));
+            Ok(match s {
+                Value::String(inner) => inner,
+                other => other.to_string(),
+            })
+        })
+    }
 }
 
 /// Development backend: no brain needed; canned answers.
@@ -387,6 +438,17 @@ impl AgentBackend for MockAgent {
                 slug: String::new(),
                 reason: "mock brain does not resolve".into(),
             })
+        })
+    }
+
+    fn reorg_suggest(
+        &self,
+        _tracks_json: &str,
+        _timeout: Duration,
+    ) -> BoxFuture<'_, Result<String, AgentError>> {
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok("[]".to_string())
         })
     }
 }

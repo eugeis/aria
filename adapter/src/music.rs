@@ -91,12 +91,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let mp = (5 * doy + 2) / 153;
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    ((if m <= 2 { y + 1 } else { y }) as i64, m, d)
-}
-
-#[derive(Serialize)]
-struct TrackList {
-    tracks: Vec<TrackView>,
+    ((if m <= 2 { y + 1 } else { y }), m, d)
 }
 
 #[derive(Serialize)]
@@ -121,12 +116,6 @@ struct CollectionView {
     artists: Vec<ArtistView>,
 }
 
-#[derive(Serialize)]
-struct LibraryView {
-    collections: Vec<CollectionView>,
-    total: usize,
-}
-
 fn sort_tracks<'a>(tracks: impl Iterator<Item = &'a aria_audio::Track>) -> Vec<TrackView> {
     let mut v: Vec<TrackView> = tracks.map(track_view).collect();
     v.sort_by(|a, b| {
@@ -147,8 +136,10 @@ async fn handle_library(State(state): State<Arc<AppState>>, headers: HeaderMap) 
         return crate::web::denied();
     }
     let lib = state.library.read().unwrap();
-    let mut by_collection: std::collections::BTreeMap<String, (CollectionKind, Vec<&aria_audio::Track>)> =
-        std::collections::BTreeMap::new();
+    let mut by_collection: std::collections::BTreeMap<
+        String,
+        (CollectionKind, Vec<&aria_audio::Track>),
+    > = std::collections::BTreeMap::new();
     for t in lib.iter() {
         by_collection
             .entry(t.collection.clone())
@@ -188,11 +179,7 @@ async fn handle_library(State(state): State<Arc<AppState>>, headers: HeaderMap) 
                     .map(|t| t.year.trim().to_string())
                     .unwrap_or_default();
                 let mut list = sort_tracks(al_tracks.iter().copied());
-                list.sort_by(|a, b| {
-                    a.track_no
-                        .cmp(&b.track_no)
-                        .then(a.title.cmp(&b.title))
-                });
+                list.sort_by(|a, b| a.track_no.cmp(&b.track_no).then(a.title.cmp(&b.title)));
                 albums.push(AlbumView {
                     name: al_name.clone(),
                     year,
@@ -245,10 +232,7 @@ async fn handle_library_search(
         )
             .into_response();
     }
-    let col = q
-        .collection
-        .as_deref()
-        .map(|s| s.trim().to_lowercase());
+    let col = q.collection.as_deref().map(|s| s.trim().to_lowercase());
     let lib = state.library.read().unwrap();
     let mut scored: Vec<(u8, TrackView)> = Vec::new();
     for t in lib.iter() {
@@ -337,6 +321,20 @@ async fn handle_play(
     let token = state.registry.issue("web", src);
     let url = format!("{}/stream/{}", state.cfg.base_url(), token);
     let art = state.art_url(body.id);
+    // The user-scope recent list (per the caller's verified realm claim).
+    if let Some(u) = crate::web::authorized(&state.cfg, &headers) {
+        state.recent.record(
+            &u.user_key(),
+            crate::web::RecentItem {
+                title: title.clone(),
+                artist: artist.clone(),
+                kind: "play".into(),
+                track_id: Some(body.id),
+                path: None,
+                at: crate::web::fmt_time(std::time::SystemTime::now()),
+            },
+        );
+    }
     Json(serde_json::json!({
         "ok": true,
         "url": url,
@@ -351,7 +349,7 @@ async fn handle_play(
 // playlists
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
 pub struct PlItem {
     /// "track" (a library id) or "youtube" (a video URL).
@@ -369,30 +367,24 @@ pub struct PlItem {
     pub duration_ms: Option<u64>,
 }
 
-impl Default for PlItem {
-    fn default() -> Self {
-        Self {
-            kind: String::new(),
-            track_id: None,
-            url: None,
-            title: String::new(),
-            artist: String::new(),
-            album: String::new(),
-            duration_ms: None,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Playlist {
     pub id: String,
     pub name: String,
+    /// The personal-scope owner (the user realm key). Pre-multi-user
+    /// playlists default to "admin" (the sole user at the time).
+    #[serde(default = "default_owner")]
+    pub owner: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub items: Vec<PlItem>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+fn default_owner() -> String {
+    "admin".to_string()
 }
 
 impl Default for Playlist {
@@ -401,6 +393,7 @@ impl Default for Playlist {
             id: String::new(),
             name: String::new(),
             description: String::new(),
+            owner: default_owner(),
             items: Vec::new(),
             created_at: String::new(),
             updated_at: String::new(),
@@ -435,17 +428,42 @@ impl PlaylistStore {
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<Vec<Playlist>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Playlist>> {
         self.list.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    pub fn summary(&self) -> Vec<Value> {
+    /// Drop items referencing the given track ids (every user's playlists)
+    /// — after a dedupe removed the underlying files.
+    pub fn forget_track_ids(&self, ids: &[u64]) {
+        if ids.is_empty() {
+            return;
+        }
+        let mut list = self.lock();
+        let mut changed = false;
+        for p in list.iter_mut() {
+            let before = p.items.len();
+            p.items
+                .retain(|it| it.track_id.map(|id| !ids.contains(&id)).unwrap_or(true));
+            if p.items.len() != before {
+                changed = true;
+                p.updated_at = now_iso();
+            }
+        }
+        if changed {
+            self.save(&list);
+        }
+    }
+
+    /// The caller's playlists (admin sees all — the owner field travels).
+    pub fn summary(&self, user_key: &str, is_admin: bool) -> Vec<Value> {
         let list = self.lock();
         list.iter()
+            .filter(|p| is_admin || p.owner == user_key)
             .map(|p| {
                 serde_json::json!({
                     "id": p.id,
                     "name": p.name,
+                    "owner": p.owner,
                     "description": p.description,
                     "count": p.items.len(),
                     "updated_at": p.updated_at,
@@ -454,6 +472,12 @@ impl PlaylistStore {
             .collect()
     }
 
+    /// Find a playlist the caller may SEE (owner, or admin).
+    fn find_visible(&self, id: &str, user_key: &str, is_admin: bool) -> bool {
+        self.lock()
+            .iter()
+            .any(|p| p.id == id && (is_admin || p.owner == user_key))
+    }
 }
 
 fn new_id() -> String {
@@ -516,11 +540,14 @@ fn store(state: &AppState) -> &PlaylistStore {
 }
 
 async fn handle_playlists_get(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if crate::web::authorized(&state.cfg, &headers).is_none() {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
-    }
-    Json(serde_json::json!({"ok": true, "playlists": store(&state).summary()}))
-        .into_response()
+    };
+    let uk = u.user_key();
+    Json(
+        serde_json::json!({"ok": true, "playlists": store(&state).summary(&uk, u.role == "admin")}),
+    )
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -535,9 +562,9 @@ async fn handle_playlists_create(
     headers: HeaderMap,
     Json(body): Json<PlaylistCreateBody>,
 ) -> Response {
-    if crate::web::authorized(&state.cfg, &headers).is_none() {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
-    }
+    };
     let name = body.name.trim().to_string();
     if name.is_empty() {
         return (
@@ -551,6 +578,7 @@ async fn handle_playlists_create(
         id: new_id(),
         name: name.clone(),
         description: body.description.unwrap_or_default(),
+        owner: u.user_key(),
         items: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
@@ -573,8 +601,15 @@ async fn handle_playlist_get(
     headers: HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Response {
-    if crate::web::authorized(&state.cfg, &headers).is_none() {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
+    };
+    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
+        )
+            .into_response();
     }
     let list = store(&state).lock();
     match list.iter().find(|p| p.id == id) {
@@ -602,8 +637,15 @@ async fn handle_playlist_update(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(body): Json<PlaylistUpdateBody>,
 ) -> Response {
-    if crate::web::authorized(&state.cfg, &headers).is_none() {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
+    };
+    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
+        )
+            .into_response();
     }
     let mut list = store(&state).lock();
     let Some(p) = list.iter_mut().find(|p| p.id == id) else {
@@ -629,8 +671,15 @@ async fn handle_playlist_delete(
     headers: HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Response {
-    if crate::web::authorized(&state.cfg, &headers).is_none() {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
+    };
+    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
+        )
+            .into_response();
     }
     let mut list = store(&state).lock();
     let before = list.len();
@@ -672,10 +721,7 @@ struct ItemAdd {
 }
 
 /// Build + validate new playlist items (shared by add and replace).
-fn build_items(
-    state: &AppState,
-    items: &[ItemAdd],
-) -> (Vec<PlItem>, Vec<String>) {
+fn build_items(state: &AppState, items: &[ItemAdd]) -> (Vec<PlItem>, Vec<String>) {
     let lib = state.library.read().unwrap();
     let mut out = Vec::new();
     let mut errors = Vec::new();
@@ -741,8 +787,15 @@ async fn handle_playlist_items_add(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(body): Json<ItemsAddBody>,
 ) -> Response {
-    if crate::web::authorized(&state.cfg, &headers).is_none() {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
+    };
+    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
+        )
+            .into_response();
     }
     let (new_items, errors) = build_items(&state, &body.items);
     if new_items.is_empty() && !errors.is_empty() {
@@ -777,8 +830,15 @@ async fn handle_playlist_items_replace(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(body): Json<ItemsAddBody>,
 ) -> Response {
-    if crate::web::authorized(&state.cfg, &headers).is_none() {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
+    };
+    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
+        )
+            .into_response();
     }
     let (new_items, errors) = build_items(&state, &body.items);
     let mut list = store(&state).lock();
@@ -806,8 +866,15 @@ async fn handle_playlist_item_remove(
     axum::extract::Path(id): axum::extract::Path<String>,
     axum::extract::Query(q): axum::extract::Query<ItemPosQuery>,
 ) -> Response {
-    if crate::web::authorized(&state.cfg, &headers).is_none() {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
+    };
+    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
+        )
+            .into_response();
     }
     let mut list = store(&state).lock();
     let Some(p) = list.iter_mut().find(|p| p.id == id) else {
@@ -839,7 +906,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dl/library", get(handle_library))
         .route("/dl/library/search", get(handle_library_search))
         .route("/dl/play", post(handle_play))
-        .route("/dl/playlists", get(handle_playlists_get).post(handle_playlists_create))
+        .route(
+            "/dl/playlists",
+            get(handle_playlists_get).post(handle_playlists_create),
+        )
         .route(
             "/dl/playlists/{id}",
             get(handle_playlist_get)

@@ -23,6 +23,8 @@ pub struct AppState {
     pub dl_queue: Arc<crate::web::DlQueue>,
     /// The web-app playlists (persisted at {data_dir}/playlists.json).
     pub playlists: Arc<crate::music::PlaylistStore>,
+    /// The per-user recent list (the user realm scope; {data_dir}/recent.json).
+    pub recent: Arc<crate::web::RecentStore>,
     pub started: Instant,
 }
 
@@ -31,6 +33,7 @@ impl AppState {
         let players = load_state(&cfg.state_path()).players;
         let dl_queue = crate::web::DlQueue::load(&cfg);
         let playlists = crate::music::PlaylistStore::load(&cfg);
+        let recent = crate::web::RecentStore::load(&cfg);
         Self {
             cfg,
             library: Arc::new(RwLock::new(library)),
@@ -39,6 +42,7 @@ impl AppState {
             agent,
             dl_queue,
             playlists,
+            recent,
             started: Instant::now(),
         }
     }

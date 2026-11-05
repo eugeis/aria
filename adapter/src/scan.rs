@@ -365,8 +365,8 @@ pub fn scan_library(cfg: &Config) -> Result<(Library, Vec<serde_json::Value>), S
     let reg_path = cfg.data_dir().join("id-registry.json");
     let mut registry = aria_audio::IdRegistry::load(&reg_path);
     let known = registry.map.len();
-    let library = Library::scan_collections_with(&items, &mut registry)
-        .map_err(|e| e.to_string())?;
+    let library =
+        Library::scan_collections_with(&items, &mut registry).map_err(|e| e.to_string())?;
     registry.save(&reg_path);
     let fresh = registry.map.len() - known;
     if fresh > 0 {

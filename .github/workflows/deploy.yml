@@ -150,6 +150,7 @@ jobs:
            declare -A FILES=(
              [MOAIC_JWT_SECRET]=/home/ee/.ssh/aria-jwt-secret
              [MOAIC_ADMIN_PASSWORD]=/home/ee/.ssh/aria-admin-password
+             [MOAIC_ANNA_PASSWORD]=/home/ee/.ssh/aria-anna-password
              [MOAIC_ADAPTER_TOKEN]=/home/ee/.ssh/aria-adapter-token
              [MOAIC_CHAT_API_KEY]=/home/ee/.ssh/openrouter
              [MOAIC_MCP_BIBLE_AUTH]=/home/ee/.ssh/bible-reader-token

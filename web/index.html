@@ -40,6 +40,7 @@
   <button data-tab="playlists">Playlists <span id="pl-count" class="count hidden">0</span></button>
   <button data-tab="queue">Downloads <span id="queue-count" class="count hidden">0</span></button>
   <button data-tab="offline">Offline <span id="offline-count" class="count hidden">0</span></button>
+  <button data-tab="reorg">Organizer</button>
   <button data-tab="cookies">YouTube-Login</button>
 </nav>
 
@@ -79,6 +80,8 @@
         <button id="pl-new">Erstellen</button>
       </div>
       <div id="pl-cards" class="pl-cards"></div>
+      <h3>Zuletzt gespielt / heruntergeladen</h3>
+      <div id="recent-list" class="pl-items"></div>
     </div>
     <div id="pl-detail" class="pl-detail hidden">
       <button id="pl-back" class="ghost">← Playlists</button>
@@ -111,6 +114,38 @@
       </table>
       <p id="queue-empty" class="muted">Keine Downloads in der Warteschlange.</p>
     </div>
+  </section>
+
+  <!-- REORGANIZER -->
+  <section id="tab-reorg" class="tab">
+    <p class="muted">
+      Alte Sammlungen aufräumen: Dateien/Ordner in ein sauberes Layout verschieben
+      (Künstler/Album), Duplikate entfernen, verhuschte Katalogdaten per LLM korrigieren.
+      IDs, Einbettungen und Playlists bleiben erhalten. <b>Änderungen: nur Admin.</b>
+    </p>
+    <div class="row">
+      <div class="seg" id="reorg-style">
+        <button data-style="artist-album" class="active">Künstler/Album</button>
+        <button data-style="artist-flat">Künstler</button>
+        <button data-style="flat">Flach</button>
+        <button data-style="keep">Nur prüfen</button>
+      </div>
+      <select id="reorg-collection"></select>
+      <button id="reorg-plan">Vorschau</button>
+      <button id="reorg-apply" class="ghost danger hidden">✂ Verschieben durchführen</button>
+    </div>
+    <div id="reorg-summary" class="muted"></div>
+    <div id="reorg-moves" class="pl-items"></div>
+    <h3>Duplikate (gleicher Inhalt)</h3>
+    <div id="reorg-dupes"></div>
+    <h3>Katalog-Vorschläge (LLM)</h3>
+    <div class="row">
+      <span id="reorg-amb-count" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="reorg-suggest" class="ghost" disabled>Vorschläge erstellen</button>
+      <button id="reorg-apply-suggest" class="ghost hidden">✔ Akzeptierte übernehmen</button>
+    </div>
+    <div id="reorg-suggests" class="pl-items"></div>
   </section>
 
   <!-- OFFLINE -->

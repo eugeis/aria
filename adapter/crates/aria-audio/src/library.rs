@@ -133,14 +133,12 @@ pub fn fingerprint_file(path: &Path) -> u64 {
         step(&buf[..n]);
     }
     let tail_start = md.len().saturating_sub(buf.len() as u64);
-    if tail_start > 0 {
-        if fh.seek(SeekFrom::Start(tail_start)).is_ok() {
-            if let Ok(n) = fh.read(&mut buf) {
-                step(&buf[..n]);
-            }
+    if tail_start > 0 && fh.seek(SeekFrom::Start(tail_start)).is_ok() {
+        if let Ok(n) = fh.read(&mut buf) {
+            step(&buf[..n]);
         }
     }
-    step(&(md.len() as u64).to_le_bytes());
+    step(&md.len().to_le_bytes());
     h
 }
 
@@ -151,6 +149,46 @@ fn fnv1a_str(s: &str) -> u64 {
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     h
+}
+
+/// Write the given title/artist/album values into the file's primary tag
+/// (creating one when missing — the format's native tag type). Only the
+/// provided (non-None) fields are touched. Used by the reorg feature's
+/// "apply the LLM suggestions" step.
+pub fn set_tags(
+    path: &Path,
+    title: Option<&str>,
+    artist: Option<&str>,
+    album: Option<&str>,
+) -> Result<(), String> {
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::Accessor;
+    let mut tagged = lofty::read_from_path(path).map_err(|e| e.to_string())?;
+    {
+        let tag = match tagged.primary_tag_mut() {
+            Some(t) => t,
+            None => {
+                let tt = tagged.file_type().primary_tag_type();
+                let _ = tagged.insert_tag(lofty::tag::Tag::new(tt));
+                tagged
+                    .primary_tag_mut()
+                    .ok_or("could not create a tag for this format")?
+            }
+        };
+        if let Some(v) = title {
+            tag.set_title(v.to_string());
+        }
+        if let Some(v) = artist {
+            tag.set_artist(v.to_string());
+        }
+        if let Some(v) = album {
+            tag.set_album(v.to_string());
+        }
+    }
+    let mut out = fs::File::create(path).map_err(|e| e.to_string())?;
+    tagged
+        .save_to(&mut out, lofty::config::WriteOptions::default())
+        .map_err(|e| e.to_string())
 }
 
 /// The persistent track-id registry: content fingerprint → stable id.
@@ -734,9 +772,19 @@ fn clean_artist(a: &str) -> String {
     let n = a.trim().to_lowercase();
     if matches!(
         n.as_str(),
-        "kein kuenstler" | "kein künstler" | "keine kuensterin" | "keine künstlerin"
-            | "unbekannt" | "unbekannter kuenstler" | "unbekannter künstler"
-            | "unknown" | "unknown artist" | "n/a" | "none" | "various artists" | "diverse"
+        "kein kuenstler"
+            | "kein künstler"
+            | "keine kuensterin"
+            | "keine künstlerin"
+            | "unbekannt"
+            | "unbekannter kuenstler"
+            | "unbekannter künstler"
+            | "unknown"
+            | "unknown artist"
+            | "n/a"
+            | "none"
+            | "various artists"
+            | "diverse"
     ) {
         String::new()
     } else {
@@ -926,10 +974,8 @@ mod tests {
 
         // First-ever scan: legacy positional ids (1, 2 in sort order).
         let lib1 = Library::scan_collections(&items).unwrap();
-        let by_path1: std::collections::HashMap<String, u64> = lib1
-            .iter()
-            .map(|t| (t.path.clone(), t.id))
-            .collect();
+        let by_path1: std::collections::HashMap<String, u64> =
+            lib1.iter().map(|t| (t.path.clone(), t.id)).collect();
         let ids1: Vec<u64> = lib1.iter().map(|t| t.id).collect();
         assert_eq!(ids1, vec![1, 2], "a fresh scan keeps the legacy ids");
 
@@ -957,7 +1003,10 @@ mod tests {
             .map(|t| t.id)
             .collect();
         assert_eq!(
-            moved_b.iter().copied().collect::<std::collections::HashSet<_>>(),
+            moved_b
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>(),
             by_path1
                 .iter()
                 .filter(|(p, _)| p.ends_with("Bohemian.mp3"))
@@ -966,7 +1015,10 @@ mod tests {
             "the moved file kept its id"
         );
         assert_eq!(
-            moved_r.iter().copied().collect::<std::collections::HashSet<_>>(),
+            moved_r
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>(),
             by_path1
                 .iter()
                 .filter(|(p, _)| p.ends_with("Radio.mp3"))
@@ -982,7 +1034,14 @@ mod tests {
         let lib3 = Library::scan_collections_with(&items, &mut reg).unwrap();
         let bohemian = lib3
             .iter()
-            .filter(|t| t.fingerprint == lib3.iter().find(|t| t.path.ends_with("Bohemian.mp3")).unwrap().fingerprint)
+            .filter(|t| {
+                t.fingerprint
+                    == lib3
+                        .iter()
+                        .find(|t| t.path.ends_with("Bohemian.mp3"))
+                        .unwrap()
+                        .fingerprint
+            })
             .collect::<Vec<_>>();
         assert_eq!(bohemian.len(), 2, "the twin shares the fingerprint");
         let ids3: Vec<u64> = bohemian.iter().map(|t| t.id).collect();
