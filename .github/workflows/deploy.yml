@@ -153,10 +153,14 @@ jobs:
              [MOAIC_ADAPTER_TOKEN]=/home/ee/.ssh/aria-adapter-token
              [MOAIC_CHAT_API_KEY]=/home/ee/.ssh/openrouter
              [MOAIC_MCP_BIBLE_AUTH]=/home/ee/.ssh/bible-reader-token
-             # The Alexa skill's Client ID (Endpoint configuration) — gates
-             # the /alexa endpoint to this skill (aria-client-id secret).
-             [ARIA_CLIENT_ID]=/home/ee/.ssh/aria-client-id
-           )
+              # The Alexa skill's Client ID (Endpoint configuration) — gates
+              # the /alexa endpoint to this skill (aria-client-id secret).
+              [ARIA_CLIENT_ID]=/home/ee/.ssh/aria-client-id
+              # Web-app login token — gates the /dl download manager (the
+              # browser presents it once; the injector reads it from the
+              # moaic-aria-web-token secret, optional = open access if absent).
+              [ARIA_WEB_TOKEN]=/home/ee/.ssh/aria-web-token
+            )
           for VAR in "${!FILES[@]}"; do
             f="${FILES[$VAR]}"
             if [ -f "$f" ]; then

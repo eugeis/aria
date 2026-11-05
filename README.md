@@ -128,9 +128,20 @@ What a Mosaic app cannot declare (Law 1) and the Echo needs:
   audiobook / sermon folder semantics), the deterministic
   `media.jsonl.gz` publisher, and the brain reindex trigger.
 
-The ZeroClaw bridge of aria v1 is gone: the brain IS the Mosaic app. (If a
-ZeroClaw surface is ever needed again, Mosaic's `gateway.routes` gives you a
-byte-passthrough to its REST/SSE side with a 3-line tessera declaration.)
+ The ZeroClaw bridge of aria v1 is gone: the brain IS the Mosaic app. (If a
+ ZeroClaw surface is ever needed again, Mosaic's `gateway.routes` gives you a
+ byte-passthrough to its REST/SSE side with a 3-line tessera declaration.)
+
+- **the web app (Aria Downloads)** — the sidecar also owns `/`: an embedded
+  static SPA + the `/dl` REST API for growing the library from a browser:
+  YouTube session upload (Netscape `cookies.txt`, stored 0600), search and
+  playlist lookup via yt-dlp, a persistent download queue worked one item at
+  a time (yt-dlp → MP3 192 k → ID3 tags → `<collection>/<Artist>/<Album>/NN -
+  title.mp3`), and an automatic rescan + brain reindex when the queue
+  drains. Gated by the `ARIA_WEB_TOKEN` web login. The pod sees the host's
+  self-updating yt-dlp read-only at `/opt/ytbin` (`~/.local/bin` hostPath);
+  ffmpeg is baked into the adapter image. See
+  `deploy/li7/SECRETS.md` → "Web app + YouTube downloads".
 
 ## Developing locally
 

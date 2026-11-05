@@ -14,6 +14,7 @@ the workflow strips it).
 | `/home/ee/.ssh/openrouter` | `MOAIC_CHAT_API_KEY` → `moaic-chat-api-key` | the OpenRouter key for the voice brain — house policy: ALL mosaic apps run their operations on OpenRouter (the in-house vLLM box is dev/data-prep only). This is the SAME file the pages app uses; the deploy workflow points at it directly. |
 | `/home/ee/.ssh/bible-reader-token` | `MOAIC_MCP_BIBLE_AUTH` → `moaic-mcp-bible-auth` | the bible app's `reader` service-account token — the bearer the brain's MCP client presents to `https://bible.eisler-systems.de/mcp` (share it from bible's `MOAIC_READER_TOKEN` secret) |
 | `/home/ee/.ssh/aria-client-id` | `ARIA_CLIENT_ID` → `moaic-aria-client-id` | the Alexa skill's Client ID (console → Endpoint configuration) — the `/alexa` request check only accepts envelopes from this skill. `secretKeyRef` is `optional: true`: no file/secret = check off (fail-soft, the pod never crashes on it) |
+| `/home/ee/.ssh/aria-web-token` | `ARIA_WEB_TOKEN` → `moaic-aria-web-token` | the web-app login token (the download manager at `https://aria.eisler-systems.de/` — the browser must present it once via `/dl/login`). `secretKeyRef` is `optional: true`: no secret = open access (dev only — always set it on li7). The value is the single source of truth in this file; the same token is also shown to the user for the browser. |
 
 Missing files do not fail the deploy — the matching surface fails soft
 (workflow LLM answers, the bible MCP tools, or auth) until the secret exists.
@@ -57,9 +58,35 @@ sudo mkdir -p /var/lib/aria-data /var/lib/aria-lancedb
   └── ...
   ```
 
-  MP3 and AAC (m4a/m4b) stream to the Echo; FLAC is indexed but not
-  playable. Add a collection by editing the baked config's
+  MP3 and AAC (m4a/m4b) stream to the Echo. FLAC/WMA/OGG/OPUS/WAV are
+  transcodable in place: `tools/transcode /home/ee/audio` (needs ffmpeg,
+  idempotent, originals untouched) — the adapter's hourly rescan picks the
+  new MP3s up. Add a collection by editing the baked config's
   `[collections]` items (→ rebuild the `mosaic/aria-ask` image).
+
+## Web app + YouTube downloads (2026-11)
+
+`https://aria.eisler-systems.de/` serves the **Aria Downloads** web app
+(the `aria-ask` sidecar owns `/` — the brain keeps `/api`, `/mcp`,
+`/openapi.json`, `/readyz` behind the same ingress). Login = the web token
+above. Flow:
+
+1. **YouTube session (optional but recommended):** the user exports their
+   browser's YouTube cookies (a "cookies.txt" extension, logged in with
+   their Premium account) and uploads them in the app → stored at
+   `/var/lib/aria-data/adapter/youtube-cookies.txt` (mode 600, read only by
+   yt-dlp via `--cookies`). No cookies = downloads run as a plain guest.
+2. **Search / playlist → mark → queue:** the app shells out to yt-dlp
+   (`/opt/ytbin/yt-dlp` — a READ-ONLY hostPath of `/home/ee/.local/bin`,
+   where `tools/aria-dl` self-installs the latest release; the adapter
+   image itself carries no yt-dlp). Downloads run one at a time in the
+   sidecar (ffmpeg is baked in), land as
+   `<collection>/<Artist>/<Album>/NN - title.mp3` (192 kbps, ID3-tagged),
+   and when the queue drains the adapter rescans + reindexes the brain, so
+   new tracks are playable by voice immediately.
+3. Queue state persists at `/var/lib/aria-data/adapter/dl-queue.json`;
+   an in-flight download interrupted by a restart is parked as
+   "failed — interrupted", never stuck.
 
 ## No vLLM access from li7 (2026-11)
 
@@ -78,12 +105,12 @@ not again)**, so:
   directly.
 
 ## Memory budget (do not raise requests casually)
-## Memory budget (do not raise requests casually)
 
 li7 has **61.5 Gi allocatable** and co-tenants (bible ~51 Gi, pages ~8 Gi,
 mosaic-app 1 replica, …) already reserve ~60 Gi. The aria pod requests
-**0.5 Gi (brain) + 0.125 Gi (adapter)** — sized to schedule even on a full
-cold node restart. The rollout strategy is no-surge (`maxSurge: 0`,
+**0.5 Gi (brain) + 0.25 Gi (adapter)** — the adapter request rose with the
+web download worker (yt-dlp + ffmpeg burst; limit 2 Gi) — still sized to
+schedule on a cold node restart. The rollout strategy is no-surge (`maxSurge: 0`,
 `maxUnavailable: 1`, injected): an old aria pod and its replacement may
 never both be scheduled. A post-helm `kubectl patch` of the pod template
 spawns a second ReplicaSet and can deadlock the rollout — the injector

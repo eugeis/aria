@@ -8,9 +8,11 @@ RUN cargo build --release --bin aria-ask
 FROM debian:bookworm-slim
 # ffmpeg: the web-app download pipeline (yt-dlp -x → mp3 + ID3 re-tag) runs
 # inside this container. yt-dlp itself comes from the host
-# (/opt/ytbin, a hostPath of ~/.local/bin — see deploy/li7/inject.rs).
+# (/opt/ytbin, a hostPath of ~/.local/bin — see deploy/li7/inject.rs);
+# python3 is its interpreter (the release binary is a zipapp with a
+# `#!/usr/bin/env python3` shebang — no python3, no yt-dlp).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
+ && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/aria-ask /usr/local/bin/aria-ask
 
