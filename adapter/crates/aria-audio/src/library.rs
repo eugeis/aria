@@ -507,11 +507,11 @@ fn build_track(
         meta.title
     };
     let (folder_artist, folder_album) = folder_fallback(root, path);
-    let artist = if meta.artist.is_empty() {
+    let artist = clean_artist(&if meta.artist.is_empty() {
         folder_artist
     } else {
         meta.artist
-    };
+    });
     let album = if meta.album.is_empty() {
         folder_album
     } else {
@@ -600,6 +600,24 @@ fn list_books(root: &Path) -> Vec<BookDir> {
 
 /// Folder-hierarchy fallback for missing tags: in the classic
 /// `root/Artist/Album/nn - title.mp3` layout the first two segments after
+/// Tagged artist placeholders that mean "no artist" — CD rippers and
+/// taggers love them (the owner's choral CDs carry "Kein Künstler"). Left
+/// as-is they pollute the artist records ("Kein Künstler — Künstler, …")
+/// and the spoken playback lines.
+fn clean_artist(a: &str) -> String {
+    let n = a.trim().to_lowercase();
+    if matches!(
+        n.as_str(),
+        "kein kuenstler" | "kein künstler" | "keine kuensterin" | "keine künstlerin"
+            | "unbekannt" | "unbekannter kuenstler" | "unbekannter künstler"
+            | "unknown" | "unknown artist" | "n/a" | "none" | "various artists" | "diverse"
+    ) {
+        String::new()
+    } else {
+        a.trim().to_string()
+    }
+}
+
 /// the collection root are (artist, album); a file directly under the root
 /// has neither.
 fn folder_fallback(root: &Path, path: &Path) -> (String, String) {
@@ -750,5 +768,19 @@ mod tests {
         assert_eq!(first.kind, CollectionKind::Audiobook);
         assert_eq!(first.collection, "bible-audio");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clean_artist_normalizes_placeholders() {
+        // The owner's choral CDs carry artist tags like "Kein Künstler" —
+        // they must normalize to empty, not pollute the artist records.
+        assert_eq!(clean_artist("Kein Künstler"), "");
+        assert_eq!(clean_artist("KEIN KUENSTLER"), "");
+        assert_eq!(clean_artist("Unknown Artist"), "");
+        assert_eq!(clean_artist("Various Artists"), "");
+        assert_eq!(clean_artist("  "), "");
+        // Real artists pass through untouched.
+        assert_eq!(clean_artist("Michael Jackson"), "Michael Jackson");
+        assert_eq!(clean_artist("  Queen "), "Queen");
     }
 }

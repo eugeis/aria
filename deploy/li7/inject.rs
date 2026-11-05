@@ -122,6 +122,28 @@ const BRAIN_MOUNTS_PRELUDE: &str = r"          volumeMounts:
               mountPath: /vector
 ";
 
+const STARTUP_PROBE_OLD: &str = "          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.containerPort }}
+          livenessProbe:";
+
+const STARTUP_PROBE_NEW: &str = "          # Cold-boot grace (injected by inject.rs): with a fresh
+          # index the brain embeds thousands of chunks for minutes; the
+          # 30 s readiness budget alone would flap and helm --wait would
+          # time out the rollout (observed 2026-11-04).
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.containerPort }}
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.containerPort }}
+          livenessProbe:";
+
 const VOLUMES_OLD: &str = r#"      {{- if and .Values.dataPvc .Values.dataPvc.enabled }}
       volumes:
         - name: data
@@ -320,6 +342,14 @@ fn main() {
             exit(1);
         }
         println!("injected the media hostPath volume into {dep:?}");
+    }
+
+    if !original.contains("startupProbe") {
+        if replace_once(&mut text, STARTUP_PROBE_OLD, STARTUP_PROBE_NEW) {
+            println!("injected the brain startupProbe (cold-boot grace) into {dep:?}");
+        } else {
+            println!("NOTE: startupProbe anchor not found in {dep:?} (chart changed?)");
+        }
     }
 
     let svc = helm_dir.join("templates").join("service.yaml");

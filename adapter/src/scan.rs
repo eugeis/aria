@@ -172,11 +172,15 @@ pub fn build_records(library: &Library, cfg: &Config) -> Vec<serde_json::Value> 
         m.insert("artist".into(), j(&artist));
         m.insert("album".into(), j(&album));
         m.insert("tracks".into(), j(&n));
-        recs.push(record(
-            format!("alb:{}", slugify(album)),
-            &format!("{album} — Album von {artist}, {n} Titel"),
-            m,
-        ));
+        // The collection word is part of the record text so list questions
+        // ("welche sammlungen habe ich") retrieve factual context for the
+        // LLM — it must read "Sammlung musik", not guess from names.
+        let text = if artist.is_empty() {
+            format!("{album} — Album, {n} Titel, Sammlung {collection}")
+        } else {
+            format!("{album} — Album von {artist}, {n} Titel, Sammlung {collection}")
+        };
+        recs.push(record(format!("alb:{}", slugify(album)), &text, m));
     }
     // Distinct album counts per (collection|artist) from the albums map.
     let mut album_counts: BTreeMap<String, usize> = BTreeMap::new();

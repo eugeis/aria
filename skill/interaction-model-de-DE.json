@@ -26,7 +26,13 @@
             "spiele radio {query}",
             "spiel radio {query}",
             "spiele station {query}",
-            "spiele die sendung {query}"
+            "spiele die sendung {query}",
+            "spiel {query} aus meiner sammlung",
+            "spiele {query} aus meiner sammlung",
+            "spiel {query} aus meiner bibliothek",
+            "spiele {query} aus meiner bibliothek",
+            "spiel {query} von meiner cd",
+            "spiele {query} von meiner cd"
           ]
         },
         {

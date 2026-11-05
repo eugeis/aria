@@ -19,7 +19,10 @@
             "put on {query}",
             "play the station {query}",
             "play radio {query}",
-            "play station {query}"
+            "play station {query}",
+            "play {query} from my collection",
+            "play {query} from my library",
+            "play {query} from my cd"
           ]
         },
         {

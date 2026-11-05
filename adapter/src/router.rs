@@ -124,9 +124,17 @@ async fn handle_agent_turn(state: &Arc<AppState>, device: &str, utterance: &str)
                 .text
                 .filter(|t| !t.trim().is_empty())
                 .unwrap_or_else(|| {
-                    "I got an empty answer. Try asking it a different way.".to_string()
+                    "Ich habe eine leere Antwort bekommen. Formuliere die Frage anders.".to_string()
                 });
-            ResponseBuilder::new().say(&text).end_session().build()
+            // The session stays open after an answer: the owner can chain
+            // questions ("was sagt psalm 23" → answer → "und psalm 24") and
+            // follow-up play commands ("spiel …") hit OUR model in-session
+            // instead of falling out to Amazon Music.
+            ResponseBuilder::new()
+                .say(&text)
+                .open_session()
+                .reprompt("Noch etwas? Sag deine nächste Frage — oder stopp.")
+                .build()
         }
         Err(AgentError::Connect(_)) => ResponseBuilder::new()
             .say("Ich erreiche meinen Dienst gerade nicht. Prüfe, ob Aria läuft.")
