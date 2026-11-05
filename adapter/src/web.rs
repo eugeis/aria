@@ -356,6 +356,8 @@ async fn yt_flat_json(cfg: &Config, target: &str) -> Result<Value, String> {
     let bin = ytdlp_bin()?;
     let mut cmd = tokio::process::Command::new(&bin);
     cmd.arg("--no-warnings")
+        .arg("--js-runtimes")
+        .arg("node")
         .arg("--flat-playlist")
         .arg("-J")
         .stdin(std::process::Stdio::null())
@@ -884,6 +886,8 @@ async fn run_one(state: &AppState, item: &DlItem) {
 
     let mut cmd = tokio::process::Command::new(&bin);
     cmd.arg("--no-warnings")
+        .arg("--js-runtimes")
+        .arg("node")
         .arg("-f")
         .arg("bestaudio/best")
         .arg("-x")

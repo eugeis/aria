@@ -10,9 +10,12 @@ FROM debian:bookworm-slim
 # inside this container. yt-dlp itself comes from the host
 # (/opt/ytbin, a hostPath of ~/.local/bin — see deploy/li7/inject.rs);
 # python3 is its interpreter (the release binary is a zipapp with a
-# `#!/usr/bin/env python3` shebang — no python3, no yt-dlp).
+# `#!/usr/bin/env python3` shebang — no python3, no yt-dlp), and nodejs is
+# the JavaScript runtime yt-dlp ≥2026 needs for full YouTube extraction
+# (invoked via --js-runtimes node; without one, formats go missing and
+# bot-protected streams fail).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 \
+ && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 nodejs \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/aria-ask /usr/local/bin/aria-ask
 
