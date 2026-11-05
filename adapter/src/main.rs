@@ -20,6 +20,7 @@ use tracing_subscriber::EnvFilter;
 
 mod agent;
 mod config;
+mod music;
 mod router;
 mod scan;
 mod state;
@@ -238,6 +239,7 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
         .route("/skill-icons/icon-512.png", get(stream::handle_icon_512))
         .route("/health", get(stream::handle_health))
         .merge(web::routes())
+        .merge(music::routes())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);
 

@@ -57,7 +57,7 @@ const OIDC_CLIENT_ID_ENV: &str = "ARIA_OIDC_CLIENT_ID";
 const ID_COOKIE: &str = "mosaic_token";
 
 #[derive(Serialize, Clone)]
-struct WebUser {
+pub struct WebUser {
     sub: String,
     role: String,
     name: Option<String>,
@@ -184,7 +184,7 @@ fn verify_web_token(tok: &str, legacy_token: Option<&str>) -> Option<WebUser> {
 /// The authenticated caller, or None. (No-op open access only when no
 /// credential machinery is configured at all: no JWT secret, no web token,
 /// no OIDC — i.e. a bare dev run.)
-fn authorized(cfg: &Config, headers: &HeaderMap) -> Option<WebUser> {
+pub fn authorized(cfg: &Config, headers: &HeaderMap) -> Option<WebUser> {
     let legacy = cfg.server.web_token.as_deref();
     let any_auth_configured = std::env::var(JWT_SECRET_ENV)
         .map(|s| !s.is_empty())
@@ -259,7 +259,7 @@ async fn handle_logout() -> Response {
         .into_response()
 }
 
-fn denied() -> Response {
+pub fn denied() -> Response {
     (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok": false, "error": "not authorized"})))
         .into_response()
 }
