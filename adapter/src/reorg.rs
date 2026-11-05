@@ -250,7 +250,7 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
         let ext = ext_of(&t.path);
         let (segs, name) = target_of(move_style, t, &ext);
         let needs_catalog_fix =
-            kind == "music" && (needs_work(&t.artist) || needs_work(&t.album));
+            kind == "music" && (needs_work(&t.artist) || needs_work(&t.album) || needs_work(&t.title));
         if name.is_empty() {
             if needs_catalog_fix {
                 push_ambiguous(&mut ambiguous, t);
@@ -308,7 +308,10 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
                 to: target_s,
                 reason: reason.to_string(),
             });
-        } else if needs_catalog_fix {
+        }
+        // Independent of the move: a messy CATALOG needs LLM work even when
+        // the file is already where the layout wants it (and vice versa).
+        if needs_catalog_fix {
             push_ambiguous(&mut ambiguous, t);
         }
     }
