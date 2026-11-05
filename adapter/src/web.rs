@@ -898,15 +898,10 @@ async fn run_one(state: &AppState, item: &DlItem) {
     if let Some(f) = cookies_file(&state.cfg) {
         cmd.arg("--cookies").arg(f);
     }
-    if !item.artist.is_empty() {
-        cmd.arg("--parse-metadata").arg(format!("artist:{}", item.artist));
-    }
-    if !item.album.is_empty() {
-        cmd.arg("--parse-metadata").arg(format!("album:{}", item.album));
-    }
-    if let Some(t) = item.track {
-        cmd.arg("--parse-metadata").arg(format!("track_number:{t}"));
-    }
+    // No --parse-metadata here: its syntax is NAME:<regex-with-named-group>
+    // and forcing literal values through it is fiddly (and a wrong value
+    // aborts the whole download). `finalize` re-tags the finished MP3 with
+    // ffmpeg anyway — the authoritative tags come from the queue entry.
     cmd.arg("-o").arg(out_tpl.to_string_lossy().as_ref());
     cmd.arg("--").arg(&item.url);
 

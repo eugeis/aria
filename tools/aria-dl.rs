@@ -279,15 +279,9 @@ fn main() {
                 "--".into(),
                 target.clone(),
             ];
-            if !a.artist.is_empty() {
-                yt_args.splice(0..0, ["--parse-metadata".to_string(), format!("artist:{}", a.artist)]);
-            }
-            if !a.album.is_empty() {
-                yt_args.splice(0..0, ["--parse-metadata".to_string(), format!("album:{}", a.album)]);
-            }
-            if let Some(t) = a.track {
-                yt_args.splice(0..0, ["--parse-metadata".to_string(), format!("track_number:{t}")]);
-            }
+            // No --parse-metadata: its value must be a named-group regex and
+            // literal values abort the download ("bad character in group
+            // name"). fix_tags() below sets the authoritative ID3 tags.
             print!("aria-dl: downloading '{target}' … ");
             let res = run(&bin, &yt_args.iter().map(|s| s.as_str()).collect::<Vec<_>>()[..]);
             match res {
