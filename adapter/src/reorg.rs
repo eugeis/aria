@@ -75,14 +75,29 @@ pub fn parse_style(s: &str) -> Option<Style> {
 /// already in its (normalized) target place is NOT a move.
 fn norm_cmp(s: &str) -> String {
     let low = s.to_lowercase();
-    let no_num = low.split(['-', '.']).next().unwrap_or(&low);
-    let no_num = if no_num.trim().chars().all(|c| c.is_ascii_digit()) && !no_num.trim().is_empty() {
-        // "01 - title" → "title"; otherwise keep the whole name
-        low.split(['-', '.']).skip(1).collect::<Vec<_>>().join("-")
+    let base = if let Some(pos) = low.find(['-', '.']) {
+        let prefix = low[..pos].trim();
+        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+            let tail = low[pos + 1..].trim_start();
+            // "13.mp3": the dot is the EXTENSION separator, not a number
+            // prefix — keep the whole name when the tail is a bare
+            // extension (≤ 4 alphanumeric chars).
+            if low.as_bytes()[pos] == b'.'
+                && !tail.is_empty()
+                && tail.len() <= 4
+                && tail.chars().all(|c| c.is_ascii_alphanumeric())
+            {
+                low.clone()
+            } else {
+                tail.to_string()
+            }
+        } else {
+            low.clone()
+        }
     } else {
         low.clone()
     };
-    let out: String = no_num
+    let out: String = base
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == ' ')
         .collect();
@@ -162,11 +177,15 @@ fn nn_of(t: &aria_audio::Track) -> String {
 
 fn target_of(style: Style, t: &aria_audio::Track, ext: &str) -> (Vec<String>, String) {
     let nn = nn_of(t);
-    let base = match t.kind {
-        CollectionKind::Music => title_clean(&t.title),
-        CollectionKind::Sermon => title_nodate(&t.title),
-        CollectionKind::Audiobook => t.title.as_str(),
+    let raw = match t.kind {
+        CollectionKind::Music => title_clean(&t.title).to_string(),
+        CollectionKind::Sermon => title_nodate(&t.title).to_string(),
+        CollectionKind::Audiobook => t.title.clone(),
     };
+    // Titles carry whatever the tagger wrote — "song 13/13", "a:b", … A
+    // slash in the title would mint a phantom directory level, so the
+    // file-name part gets the same safety pass as folder names.
+    let base = sanitize(&raw);
     let name = format!("{nn} - {base}.{ext}");
     let artist = sanitize(&t.artist);
     let album = sanitize(&t.album);
@@ -894,6 +913,45 @@ mod tests {
             "no cosmetic-only moves: {:?}",
             plan.moves
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A slash inside the TITLE tag ("Blue Sky - song 13/13") must not mint
+    /// a phantom directory level in the target path (the live "album
+    /// duplicated" plan bug).
+    #[test]
+    fn plan_never_creates_phantom_dirs_from_slashy_titles() {
+        let dir = std::env::temp_dir().join(format!("aria-reorg-slash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("musik");
+        let album_dir = root.join("Там за горизонтом/00 - Blue Sky - song 13");
+        std::fs::create_dir_all(&album_dir).unwrap();
+        std::fs::write(album_dir.join("13.mp3"), b"slash-test").unwrap();
+        let items = [aria_audio::CollectionItem {
+            name: "musik".into(),
+            kind: CollectionKind::Music,
+            path: root.clone(),
+        }];
+        let lib = aria_audio::Library::scan_collections(&items).unwrap();
+        let plan = plan(&lib, &root, "musik", Style::ArtistAlbum);
+        for m in &plan.moves {
+            // A move target has exactly the same depth (or fewer) segments
+            // as its source + at most the intended artist/album levels — and
+            // NEVER more than source + 2.
+            let from_depth = m.from.split('/').count();
+            let to_depth = m.to.split('/').count();
+            assert!(
+                to_depth <= from_depth + 2,
+                "phantom directory levels: {:?} -> {:?}",
+                m.from,
+                m.to
+            );
+            assert!(
+                !m.to.contains("song 13/song"),
+                "album duplicated: {:?}",
+                m.to
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
