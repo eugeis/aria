@@ -376,6 +376,11 @@ pub struct Playlist {
     /// playlists default to "admin" (the sole user at the time).
     #[serde(default = "default_owner")]
     pub owner: String,
+    /// Shared with the group (tenant) — an ACTIVE action of the owner:
+    /// group members can see + play + download it, only the owner (or
+    /// admin) can edit it. Private by default.
+    #[serde(default)]
+    pub shared: bool,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub items: Vec<PlItem>,
@@ -394,6 +399,7 @@ impl Default for Playlist {
             name: String::new(),
             description: String::new(),
             owner: default_owner(),
+            shared: false,
             items: Vec::new(),
             created_at: String::new(),
             updated_at: String::new(),
@@ -454,16 +460,19 @@ impl PlaylistStore {
         }
     }
 
-    /// The caller's playlists (admin sees all — the owner field travels).
+    /// The playlists the caller sees: their own + the group's shared ones
+    /// (admin sees all — the owner field travels).
     pub fn summary(&self, user_key: &str, is_admin: bool) -> Vec<Value> {
         let list = self.lock();
         list.iter()
-            .filter(|p| is_admin || p.owner == user_key)
+            .filter(|p| is_admin || p.owner == user_key || p.shared)
             .map(|p| {
                 serde_json::json!({
                     "id": p.id,
                     "name": p.name,
                     "owner": p.owner,
+                    "shared": p.shared,
+                    "is_mine": p.owner == user_key,
                     "description": p.description,
                     "count": p.items.len(),
                     "updated_at": p.updated_at,
@@ -472,8 +481,16 @@ impl PlaylistStore {
             .collect()
     }
 
-    /// Find a playlist the caller may SEE (owner, or admin).
+    /// The caller may SEE it: owner, group-shared, or admin.
     fn find_visible(&self, id: &str, user_key: &str, is_admin: bool) -> bool {
+        self.lock()
+            .iter()
+            .any(|p| p.id == id && (is_admin || p.owner == user_key || p.shared))
+    }
+
+    /// The caller may EDIT it: owner or admin (group members can play a
+    /// shared playlist but never change it).
+    fn find_editable(&self, id: &str, user_key: &str, is_admin: bool) -> bool {
         self.lock()
             .iter()
             .any(|p| p.id == id && (is_admin || p.owner == user_key))
@@ -491,7 +508,7 @@ fn new_id() -> String {
     )
 }
 
-fn playlist_json(p: &Playlist, state: &AppState) -> Value {
+fn playlist_json(p: &Playlist, state: &AppState, user_key: &str) -> Value {
     // Resolve library items against the CURRENT library (a file moved or
     // deleted since the item was added still shows its saved metadata).
     let lib = state.library.read().unwrap();
@@ -528,6 +545,9 @@ fn playlist_json(p: &Playlist, state: &AppState) -> Value {
     serde_json::json!({
         "id": p.id,
         "name": p.name,
+        "owner": p.owner,
+        "shared": p.shared,
+        "is_mine": p.owner == user_key,
         "description": p.description,
         "items": items,
         "created_at": p.created_at,
@@ -579,6 +599,7 @@ async fn handle_playlists_create(
         name: name.clone(),
         description: body.description.unwrap_or_default(),
         owner: u.user_key(),
+        shared: false,
         items: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
@@ -613,8 +634,11 @@ async fn handle_playlist_get(
     }
     let list = store(&state).lock();
     match list.iter().find(|p| p.id == id) {
-        Some(p) => Json(serde_json::json!({"ok": true, "playlist": playlist_json(p, &state)}))
-            .into_response(),
+        Some(p) => {
+            let uk = u.user_key();
+            Json(serde_json::json!({"ok": true, "playlist": playlist_json(p, &state, &uk)}))
+                .into_response()
+        }
         None => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
@@ -640,7 +664,7 @@ async fn handle_playlist_update(
     let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
     };
-    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+    if !store(&state).find_editable(&id, &u.user_key(), u.role == "admin") {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
@@ -674,7 +698,7 @@ async fn handle_playlist_delete(
     let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
     };
-    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+    if !store(&state).find_editable(&id, &u.user_key(), u.role == "admin") {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
@@ -790,7 +814,7 @@ async fn handle_playlist_items_add(
     let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
     };
-    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+    if !store(&state).find_editable(&id, &u.user_key(), u.role == "admin") {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
@@ -833,7 +857,7 @@ async fn handle_playlist_items_replace(
     let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
     };
-    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+    if !store(&state).find_editable(&id, &u.user_key(), u.role == "admin") {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
@@ -869,7 +893,7 @@ async fn handle_playlist_item_remove(
     let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
         return crate::web::denied();
     };
-    if !store(&state).find_visible(&id, &u.user_key(), u.role == "admin") {
+    if !store(&state).find_editable(&id, &u.user_key(), u.role == "admin") {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
@@ -897,6 +921,45 @@ async fn handle_playlist_item_remove(
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
+#[derive(Deserialize)]
+struct ShareBody {
+    shared: bool,
+}
+
+/// Toggle group-sharing — an ACTIVE owner action (or admin). Group members
+/// may then see + play + download the playlist, but only the owner/admin
+/// may edit it (see `find_editable`).
+async fn handle_playlist_share(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<ShareBody>,
+) -> Response {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
+        return crate::web::denied();
+    };
+    if !store(&state).find_editable(&id, &u.user_key(), u.role == "admin") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
+        )
+            .into_response();
+    }
+    let mut list = store(&state).lock();
+    let Some(p) = list.iter_mut().find(|p| p.id == id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "error": "playlist not found"})),
+        )
+            .into_response();
+    };
+    p.shared = body.shared;
+    p.updated_at = now_iso();
+    let shared = p.shared;
+    store(&state).save(&list);
+    Json(serde_json::json!({"ok": true, "shared": shared})).into_response()
+}
+
 // ---------------------------------------------------------------------------
 // router
 // ---------------------------------------------------------------------------
@@ -922,4 +985,67 @@ pub fn routes() -> Router<Arc<AppState>> {
                 .put(handle_playlist_items_replace)
                 .delete(handle_playlist_item_remove),
         )
+        .route("/dl/playlists/{id}/share", post(handle_playlist_share))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_in(dir: &std::path::Path) -> crate::config::Config {
+        let mut c = crate::config::Config::default();
+        c.server.data_dir = Some(dir.to_path_buf());
+        c
+    }
+
+    fn pl(id: &str, owner: &str, shared: bool) -> Playlist {
+        Playlist {
+            id: id.into(),
+            name: id.into(),
+            owner: owner.into(),
+            shared,
+            description: String::new(),
+            items: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn sharing_semantics() {
+        let dir = std::env::temp_dir().join(format!("aria-pl-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::remove_file(dir.join("playlists.json"));
+        let store = PlaylistStore::load(&cfg_in(&dir));
+        {
+            let mut list = store.lock();
+            list.push(pl("mine", "admin", false));
+            list.push(pl("shared-by-anna", "anna", true));
+            list.push(pl("private-by-anna", "anna", false));
+            store.save(&list);
+        }
+        // admin (owner of "mine", and admin) sees all three.
+        let all = store.summary("admin", true);
+        assert_eq!(all.len(), 3);
+        // anna (not admin) sees her own (both) + nothing of admin's private.
+        let anna = store.summary("anna", false);
+        let anna_ids: Vec<&str> = anna.iter().map(|v| v["id"].as_str().unwrap()).collect();
+        assert_eq!(anna_ids, vec!["shared-by-anna", "private-by-anna"]);
+        // A different group member (carl) sees ONLY the shared one.
+        let carl = store.summary("carl", false);
+        assert_eq!(carl.len(), 1);
+        assert_eq!(carl[0]["id"], "shared-by-anna");
+        assert_eq!(carl[0]["is_mine"], false);
+        assert_eq!(carl[0]["shared"], true);
+        // Visibility: group member may SEE the shared playlist…
+        assert!(store.find_visible("shared-by-anna", "carl", false));
+        // …but may not EDIT it; only the owner (anna) or an admin can.
+        assert!(!store.find_editable("shared-by-anna", "carl", false));
+        assert!(store.find_editable("shared-by-anna", "anna", false));
+        assert!(store.find_editable("shared-by-anna", "carl", true));
+        // A private playlist is invisible + uneditable to group members.
+        assert!(!store.find_visible("private-by-anna", "carl", false));
+        assert!(!store.find_editable("private-by-anna", "carl", false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

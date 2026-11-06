@@ -136,9 +136,16 @@ $("pp-play").addEventListener("click", () => {
 });
 $("pp-next").addEventListener("click", playerNext);
 $("pp-prev").addEventListener("click", playerPrev);
+// Phones: tap the title / expand button for the full-screen player.
+$("pp-expand").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("player").classList.toggle("full");
+});
+$("player-info").addEventListener("click", () => $("player").classList.toggle("full"));
 $("pp-close").addEventListener("click", () => {
   player.audio.pause();
   player.audio.removeAttribute("src");
+  $("player").classList.remove("full");
   $("player").classList.add("hidden");
 });
 
@@ -399,9 +406,8 @@ function fmtSize(bytes) {
 }
 
 function offlineBadge() {
-  const b = $("offline-count");
-  b.textContent = String(offlineList.length);
-  b.classList.toggle("hidden", offlineList.length === 0);
+  setBadgeCount($("offline-count"), offlineList.length);
+  setBadgeCount($("more-offline-count"), offlineList.length);
 }
 
 function persistOffline() {
@@ -549,11 +555,10 @@ async function boot() {
   const u = me.user || {};
   window.__me = u;
   const who = u.name || u.user || "?";
-  const scope = [u.user_realm ? `Nutzer ${u.user_realm}` : null, u.tenant ? `Tenant ${u.tenant}` : null]
-    .filter(Boolean)
-    .join(" · ");
-  $("user-badge").textContent = who;
-  $("user-badge").title = `Angemeldet als ${u.user} (${u.role || "?"})${scope ? " — " + scope : ""}`;
+  // The tenant dim is the app's GROUP (the household) — one for a long
+  // time; the user dim is personal (playlists, recent).
+  $("user-badge").textContent = u.tenant ? `${who} · ${u.tenant}` : who;
+  $("user-badge").title = `Angemeldet als ${u.user} (${u.role || "?"}) — Gruppe ${u.tenant || "?"}`;
   $("user-badge").className = "badge ok";
   $("logout").classList.remove("hidden");
 
@@ -591,20 +596,35 @@ $("logout").addEventListener("click", async () => {
   location.reload();
 });
 
-// ── tabs ──────────────────────────────────────────────────────────────────
+// ── tabs (top row on desktop, bottom bar + "Mehr" sheet on phones) ──────
 
-document.querySelectorAll(".tabs button").forEach((b) =>
-  b.addEventListener("click", () => {
-    document.querySelectorAll(".tabs button").forEach((x) => x.classList.remove("active"));
-    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active");
-    $(`tab-${b.dataset.tab}`).classList.add("active");
-    if (b.dataset.tab === "queue") refreshQueueNow();
-    if (b.dataset.tab === "offline") renderOffline();
-    if (b.dataset.tab === "playlists") loadRecent();
-    if (b.dataset.tab === "reorg") loadReorgCollections();
-  })
+function switchTab(name) {
+  document.querySelectorAll(".tabs button, #bottom-nav button[data-tab]").forEach((x) => {
+    x.classList.toggle("active", x.dataset.tab === name);
+  });
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.id === `tab-${name}`));
+  closeMore();
+  if (name === "queue") refreshQueueNow();
+  if (name === "offline") renderOffline();
+  if (name === "playlists") loadRecent();
+  if (name === "reorg") loadReorgCollections();
+}
+
+document.querySelectorAll(".tabs button, #bottom-nav button[data-tab]").forEach((b) =>
+  b.addEventListener("click", () => switchTab(b.dataset.tab))
 );
+
+function openMore() {
+  $("more-sheet").classList.remove("hidden");
+}
+function closeMore() {
+  $("more-sheet").classList.add("hidden");
+}
+$("bn-more").addEventListener("click", () => $("more-sheet").classList.toggle("hidden"));
+document.querySelectorAll("#more-sheet [data-tab]").forEach((b) =>
+  b.addEventListener("click", () => switchTab(b.dataset.tab))
+);
+document.querySelectorAll("[data-close-more]").forEach((el) => el.addEventListener("click", closeMore));
 
 // ── browse ────────────────────────────────────────────────────────────────
 
@@ -848,36 +868,49 @@ $("yt-add").addEventListener("click", () => {
 
 // ── playlists ─────────────────────────────────────────────────────────────
 
+function setBadgeCount(el, n) {
+  el.textContent = String(n);
+  el.classList.toggle("hidden", n === 0);
+}
+
 async function loadPlaylists(openId = null) {
   try {
     const r = await api("/dl/playlists");
     playlistsCache = r.playlists || [];
-    $("pl-count").textContent = String(playlistsCache.length);
-    $("pl-count").classList.toggle("hidden", playlistsCache.length === 0);
   } catch {
     playlistsCache = [];
   }
+  // The tab badge counts YOUR playlists (the shared section is on top).
+  setBadgeCount($("pl-count"), playlistsCache.filter((p) => p.is_mine).length);
+  setBadgeCount($("bn-pl-count"), playlistsCache.filter((p) => p.is_mine).length);
   if (openId) return openPlaylistView(openId);
   renderPlList();
 }
 
-function renderPlList() {
-  const box = $("pl-cards");
-  if (!playlistsCache.length) {
-    box.innerHTML = `<p class="muted">Noch keine Playlists — obene eine anlegen.</p>`;
-    return;
-  }
-  const admin = window.__me?.role === "admin";
-  box.innerHTML = playlistsCache
-    .map(
-      (p) => `
+function plCardHtml(p) {
+  const shared = !!p.shared;
+  return `
     <div class="pl-card" data-pl="${p.id}">
-      <div class="pl-card-name">${esc(p.name)}${admin && p.owner ? ` <span class="muted">(${esc(p.owner)})</span>` : ""}</div>
-      <div class="muted">${p.count} Titel · ${esc(p.updated_at || "")}</div>
-      ${p.description ? `<div class="muted pl-card-desc">${esc(p.description)}</div>` : ""}
-    </div>`
-    )
-    .join("");
+      <div class="pl-card-main">
+        <div class="pl-card-name">${esc(p.name)}${p.is_mine ? "" : ` <span class="owner-chip">von ${esc(p.owner)}</span>`}</div>
+        <div class="muted">${p.count} Titel${shared ? " · 👥 geteilt" : ""}${p.updated_at ? " · " + esc(p.updated_at) : ""}</div>
+      </div>
+      ${
+        p.is_mine
+          ? `<button class="share-toggle ${shared ? "on" : ""}" data-share="${p.id}" title="${shared ? "Teilen aufheben" : "Mit der Gruppe teilen"}">${shared ? "👥" : "👤"}</button>`
+          : `<span class="share-mark" title="Mit der Gruppe geteilt">👥</span>`
+      }
+    </div>`;
+}
+
+function renderPlList() {
+  const mine = playlistsCache.filter((p) => p.is_mine);
+  const shared = playlistsCache.filter((p) => !p.is_mine);
+  $("pl-mine").innerHTML = mine.length
+    ? mine.map(plCardHtml).join("")
+    : `<p class="empty">🎵 Noch keine Playlists. Oben einen Namen eingeben und „Erstellen“ — mit dem 👥-Knopf teilst du sie aktiv mit der Gruppe.</p>`;
+  $("pl-shared-title").classList.toggle("hidden", shared.length === 0);
+  $("pl-shared").innerHTML = shared.map(plCardHtml).join("");
   $("pl-list").classList.remove("hidden");
   $("pl-detail").classList.add("hidden");
 }
@@ -888,15 +921,22 @@ async function openPlaylistView(id) {
   $("pl-list").classList.add("hidden");
   $("pl-detail").classList.remove("hidden");
   $("pl-name").textContent = openPlaylist.name;
+  const bits = [`${(openPlaylist.items || []).length} Titel`, `von ${openPlaylist.owner}`];
+  if (openPlaylist.shared) bits.push("👥 mit der Gruppe geteilt");
+  $("pl-meta").textContent = bits.join(" · ");
   $("pl-desc").textContent = openPlaylist.description || "";
-  renderPlItems();
+  // Group members may play a shared playlist — editing stays with the owner.
+  const canEdit = openPlaylist.is_mine || !isReadOnly();
+  $("pl-edit-row").classList.toggle("hidden", !canEdit);
+  $("pl-share-toggle").textContent = openPlaylist.shared ? "👤 Teilen aufheben" : "👥 Mit Gruppe teilen";
+  renderPlItems(canEdit);
 }
 
-function renderPlItems() {
+function renderPlItems(canEdit = true) {
   const box = $("pl-items");
   const items = openPlaylist?.items || [];
   if (!items.length) {
-    box.innerHTML = `<p class="muted">Leere Playlist — Titel über Suche oder Bibliothek hinzufügen.</p>`;
+    box.innerHTML = `<p class="empty">📀 Leere Playlist — Titel über „Suche“ oder die Bibliothek hinzufügen.</p>`;
     return;
   }
   box.innerHTML = items
@@ -909,13 +949,27 @@ function renderPlItems() {
       <span class="t-dur">${it.duration_ms ? fmtMs(it.duration_ms) : "–"}</span>
       <span class="t-actions">
         ${it.kind === "track" && it.playable !== false && !it.missing ? `<button class="act" data-act="pl-play" data-pos="${i}" title="Abspielen">▶</button>` : ""}
+        ${canEdit ? `
         <button class="act" data-act="pl-up" data-pos="${i}" title="Nach oben">↑</button>
         <button class="act" data-act="pl-down" data-pos="${i}" title="Nach unten">↓</button>
-        <button class="act danger" data-act="pl-del" data-pos="${i}" title="Entfernen">✕</button>
+        <button class="act danger" data-act="pl-del" data-pos="${i}" title="Entfernen">✕</button>` : ""}
       </span>
     </div>`
     )
     .join("");
+}
+
+async function toggleShare(p) {
+  const next = !p.shared;
+  try {
+    await api(`/dl/playlists/${p.id}/share`, { method: "POST", body: JSON.stringify({ shared: next }) });
+    p.shared = next;
+    toast(next ? `„${p.name}“ ist jetzt mit der Gruppe geteilt` : `Teilen von „${p.name}“ aufgehoben`);
+    if (openPlaylist && openPlaylist.id === p.id) openPlaylistView(p.id);
+    else renderPlList();
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 function plPlayableTracks() {
@@ -967,9 +1021,22 @@ async function addToPlaylist(items, plId, done) {
   }
 }
 
-$("pl-cards").addEventListener("click", (e) => {
+$("pl-list").addEventListener("click", (e) => {
+  const share = e.target.closest("[data-share]");
+  if (share) {
+    e.stopPropagation();
+    const p = playlistsCache.find((x) => x.id === share.dataset.share);
+    if (p) toggleShare(p);
+    return;
+  }
   const card = e.target.closest(".pl-card");
   if (card) openPlaylistView(card.dataset.pl).catch((err) => toast(`Playlist nicht geöffnet: ${err.message}`, true));
+});
+
+$("pl-share-toggle").addEventListener("click", () => {
+  if (!openPlaylist) return;
+  const p = { id: openPlaylist.id, name: openPlaylist.name, shared: openPlaylist.shared };
+  toggleShare(p);
 });
 
 $("pl-new").addEventListener("click", async () => {
@@ -1030,9 +1097,8 @@ function renderQueue(items) {
   const pending = items.filter((i) => i.status.status === "queued").length;
   $("queue-state").textContent = running ? `1 läuft, ${pending} warten` : pending ? `${pending} in der Warteschlange` : items.length ? "Warteschlange leer" : "";
   const count = running + pending;
-  const badge = $("queue-count");
-  badge.textContent = String(count);
-  badge.classList.toggle("hidden", count === 0);
+  setBadgeCount($("queue-count"), count);
+  setBadgeCount($("bn-queue-count"), count);
   if (!items.length) {
     table.classList.add("hidden");
     empty.classList.remove("hidden");

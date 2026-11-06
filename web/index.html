@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Aria — Musik & Downloads</title>
   <link rel="stylesheet" href="/style.css">
   <link rel="manifest" href="/manifest.webmanifest">
@@ -79,19 +79,24 @@
         <input id="pl-new-name" type="text" placeholder="Neue Playlist …">
         <button id="pl-new">Erstellen</button>
       </div>
-      <div id="pl-cards" class="pl-cards"></div>
+      <h3 class="pl-section-title">Meine Playlists</h3>
+      <div id="pl-mine" class="pl-cards"></div>
+      <h3 class="pl-section-title hidden" id="pl-shared-title">Mit der Gruppe geteilt</h3>
+      <div id="pl-shared" class="pl-cards"></div>
       <h3>Zuletzt gespielt / heruntergeladen</h3>
       <div id="recent-list" class="pl-items"></div>
     </div>
     <div id="pl-detail" class="pl-detail hidden">
       <button id="pl-back" class="ghost">← Playlists</button>
       <h2 id="pl-name"></h2>
+      <p id="pl-meta" class="muted"></p>
       <p id="pl-desc" class="muted"></p>
       <div class="row">
         <button id="pl-play-all">▶ Alle abspielen</button>
         <button id="pl-download-all" class="ghost">YouTube-Titel herunterladen</button>
-        <input id="pl-rename" type="text" class="hidden">
-        <button id="pl-save-name" class="ghost hidden">Umbenennen</button>
+      </div>
+      <div id="pl-edit-row" class="row hidden">
+        <button id="pl-share-toggle" class="ghost">👥 Mit Gruppe teilen</button>
         <button id="pl-delete" class="ghost danger">Löschen</button>
       </div>
       <div id="pl-items" class="pl-items"></div>
@@ -183,10 +188,30 @@
   </section>
 </main>
 
-<!-- PLAYER -->
+<!-- MOBILE BOTTOM NAV (<= 720px) — the top .tabs row hides, these 5 stay -->
+<nav id="bottom-nav" class="bottom-nav">
+  <button data-tab="browse" class="active"><span class="bn-ic">♫</span>Bibliothek</button>
+  <button data-tab="search"><span class="bn-ic">⌕</span>Suche</button>
+  <button data-tab="playlists"><span class="bn-ic">≡</span>Playlists<span id="bn-pl-count" class="count hidden">0</span></button>
+  <button data-tab="queue"><span class="bn-ic">⤓</span>Downloads<span id="bn-queue-count" class="count hidden">0</span></button>
+  <button id="bn-more"><span class="bn-ic">⋯</span>Mehr</button>
+</nav>
+
+<!-- MOBILE "MEHR" SHEET — the secondary tabs -->
+<div id="more-sheet" class="more-sheet hidden">
+  <div class="more-backdrop" data-close-more></div>
+  <div class="more-panel">
+    <button data-tab="offline">Offline <span id="more-offline-count" class="count hidden">0</span><small>gespeicherte Dateien</small></button>
+    <button data-tab="reorg">Organizer<small>Bibliothek aufräumen (Admin)</small></button>
+    <button data-tab="cookies">YouTube-Login<small>Premium-Cookies für Downloads</small></button>
+  </div>
+</div>
+
+<!-- PLAYER — on phones: tap the title for the full-screen view -->
 <div id="player" class="player hidden">
-  <div class="player-art" id="player-art"></div>
-  <div class="player-info">
+  <button id="pp-expand" title="Größer anzeigen" class="pp-expand">⌃</button>
+  <div class="player-art" id="player-art">♫</div>
+  <div class="player-info" id="player-info" title="Tippen: große Ansicht">
     <div id="player-title" class="player-title">–</div>
     <div id="player-artist" class="player-artist muted"></div>
   </div>
