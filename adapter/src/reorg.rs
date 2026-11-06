@@ -997,8 +997,10 @@ async fn handle_suggest(
     }
     // One workflow call per BATCH tracks: a few hundred tracks in a single
     // prompt would overflow the context window (the live plan has 491
-    // ambiguous). Sequential batches, merged.
-    const BATCH: usize = 40;
+    // ambiguous). 20/batch keeps the LLM output short enough to complete
+    // reliably (longer batches trip provider rate limits / truncated JSON).
+    // Sequential batches, merged.
+    const BATCH: usize = 20;
     let mut out: Vec<Value> = Vec::new();
     let mut failed_batches = 0usize;
     for chunk in body.tracks.chunks(BATCH) {
