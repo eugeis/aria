@@ -331,3 +331,100 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
   .t-meta, .t-dur { display: none; }
   .player-info { max-width: 40vw; }
 }
+
+/* ── mobile (touch) pass ─────────────────────────────────────────────── */
+/* Big tap targets (≥ 36-44 px), one concern per line, scrollable tabs. */
+
+@media (max-width: 720px) {
+  button, .act, .seg button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+
+  /* tabs: one scrollable row instead of a wrapped grid */
+  .tabs {
+    display: flex;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 4px;
+    padding: 6px 10px;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { flex: none; padding: 10px 14px; }
+
+  /* header + status may wrap */
+  header { flex-wrap: wrap; gap: 6px; }
+  .status { width: 100%; justify-content: flex-start; flex-wrap: wrap; gap: 6px; }
+  .badge { padding: 4px 10px; }
+
+  /* rows (tracks / playlists / recent / dupes): stacked card layout so
+     every action button gets a real thumb size */
+  .t-row, .pl-row {
+    display: block;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    border-radius: 4px;
+  }
+  .t-row .t-no, .pl-row .t-no { display: inline-block; margin-right: 8px; }
+  .t-row .t-title, .pl-row .t-title {
+    display: block;
+    white-space: normal;
+    font-size: 15px;
+    margin: 2px 0 4px;
+  }
+  .t-row .t-meta, .pl-row .t-meta { display: block; font-size: 12px; margin-bottom: 6px; white-space: normal; }
+  .t-row .t-dur, .pl-row .t-dur { display: inline-block; margin-left: 8px; }
+  .t-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-start;
+    margin-top: 6px;
+  }
+  .act {
+    min-height: 40px;
+    padding: 8px 16px;
+    font-size: 14px;
+    border-radius: 8px;
+  }
+  .pl-select { min-height: 40px; flex: 1; max-width: 100%; font-size: 14px; }
+
+  /* album head: stack the action row under the title */
+  .album-head { display: block; padding: 6px 10px 6px 20px; }
+  .album-head .t-actions { margin-top: 6px; }
+
+  /* browse indents: keep them shallow */
+  .browse .artist, .browse .album { margin-left: 8px; }
+  .browse summary { padding: 12px 10px; }
+
+  /* forms / rows wrap, inputs stay thumb-sized */
+  .row { flex-wrap: wrap; gap: 8px; }
+  .row input[type="text"], .row input[type="search"], .row select {
+    min-height: 42px;
+    flex: 1 1 100%;
+  }
+  .row button { min-height: 42px; flex: 1 1 auto; }
+  .seg { display: flex; width: 100%; }
+  .seg button { flex: 1; padding: 12px 10px; font-size: 14px; }
+
+  /* player bar: compact but thumb-friendly */
+  .player { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+  .player-info { min-width: 0; max-width: 55vw; }
+  .player-controls { order: 3; width: 100%; justify-content: center; margin-top: 4px; }
+  .player-controls button { width: 56px; height: 44px; font-size: 16px; }
+  .player-progress { order: 4; width: 100%; }
+  #pp-time { min-width: 0; font-size: 11px; }
+  #pp-close { position: absolute; top: 6px; right: 10px; }
+  .player { position: fixed; }
+
+  /* queue table → stacked cards */
+  .table-wrap { overflow-x: auto; }
+  table { min-width: 640px; }
+
+  /* login card */
+  .login-card { width: 92%; max-width: 380px; padding: 24px 20px; }
+  .login-card input, .login-card button { min-height: 44px; }
+
+  /* organizer */
+  .dupe-group .t-no input[type="radio"] { width: 28px; height: 28px; }
+  .t-no input[type="radio"], .t-no input[type="checkbox"] {
+    width: 24px; height: 24px; cursor: pointer;
+  }
+}
