@@ -60,8 +60,11 @@ async function api(path, opts = {}) {
 }
 
 function playlistSelectHtml(selected = "") {
+  // Only playlists the caller may EDIT (own, or admin) — adding to someone
+  // else's shared playlist would be a 404.
+  const editable = playlistsCache.filter((p) => p.is_mine || !isReadOnly());
   return `<select id="add-pl-select" class="pl-select">${
-    playlistsCache.map((p) => `<option value="${p.id}" ${p.id === selected ? "selected" : ""}>${esc(p.name)}</option>`).join("")
+    editable.map((p) => `<option value="${p.id}" ${p.id === selected ? "selected" : ""}>${esc(p.name)}${p.shared ? " (geteilt)" : ""}</option>`).join("")
   }</select>`;
 }
 
