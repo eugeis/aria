@@ -173,6 +173,11 @@ pub struct TagEdit {
 pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
     use lofty::file::TaggedFileExt;
     use lofty::tag::Accessor;
+    // A 0-byte file is a broken download — refuse with a clear diagnostic
+    // instead of a cryptic parser error (and never touch it).
+    if fs::metadata(path).map(|m| m.len()).unwrap_or(0) == 0 {
+        return Err("file is empty (0 bytes) — refusing to tag a broken file".to_string());
+    }
     let mut tagged = lofty::read_from_path(path).map_err(|e| e.to_string())?;
     {
         let tag = match tagged.primary_tag_mut() {
@@ -204,10 +209,25 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
             ));
         }
     }
-    let mut out = fs::File::create(path).map_err(|e| e.to_string())?;
-    tagged
-        .save_to(&mut out, lofty::config::WriteOptions::default())
-        .map_err(|e| e.to_string())
+    // Never truncate the original in place: write to a sibling temp file and
+    // rename over it (atomic on the same fs). Any failure leaves the audio
+    // untouched.
+    let tmp = path.with_file_name(format!(
+        ".{}.aria-tmp",
+        path.file_name().and_then(|s| s.to_str()).unwrap_or("file")
+    ));
+    let result = (|| -> Result<(), String> {
+        let mut out = fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        tagged
+            .save_to(&mut out, lofty::config::WriteOptions::default())
+            .map_err(|e| e.to_string())?;
+        out.sync_all().map_err(|e| e.to_string())?;
+        fs::rename(&tmp, path).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// The persistent track-id registry: content fingerprint → stable id.

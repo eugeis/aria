@@ -758,14 +758,17 @@ pub struct TagRow {
     pub language: Option<String>,
 }
 
-pub fn apply_tags(lib: &aria_audio::Library, items: &[TagRow]) -> Result<usize, String> {
+/// Writes the tags, continuing past per-file failures (one broken file must
+/// not abort the batch). Returns (tagged, per-file errors).
+pub fn apply_tags(lib: &aria_audio::Library, items: &[TagRow]) -> (usize, Vec<String>) {
     let clean = |s: Option<String>| s.filter(|s| !s.trim().is_empty());
     let mut n = 0;
+    let mut errors = Vec::new();
     for r in items {
         let Some(t) = lib.get(r.id) else {
             continue;
         };
-        aria_audio::set_tags(
+        if let Err(e) = aria_audio::set_tags(
             Path::new(&t.path),
             &aria_audio::TagEdit {
                 title: clean(r.title.clone()),
@@ -774,11 +777,13 @@ pub fn apply_tags(lib: &aria_audio::Library, items: &[TagRow]) -> Result<usize, 
                 genre: clean(r.genre.clone()),
                 language: clean(r.language.clone()),
             },
-        )
-        .map_err(|e| format!("{}: {e}", t.title))?;
+        ) {
+            errors.push(format!("{}: {e}", t.title));
+            continue;
+        }
         n += 1;
     }
-    Ok(n)
+    (n, errors)
 }
 
 // ---------------------------------------------------------------------------
@@ -1073,21 +1078,25 @@ async fn handle_apply_tags(
             })
         })
         .collect();
-    let n = {
+    let (n, errors) = {
         let lib = state.library.read().unwrap();
         apply_tags(&lib, &parsed)
     };
-    match n {
-        Ok(n) => {
-            let reindex = crate::web::rescan_cycle(&state).await.is_some();
-            Json(serde_json::json!({"ok": true, "tagged": n, "reindex": reindex})).into_response()
-        }
-        Err(e) => (
+    if n == 0 && !errors.is_empty() {
+        return (
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({"ok": false, "error": e})),
+            Json(serde_json::json!({"ok": false, "error": errors.join("; ")})),
         )
-            .into_response(),
+            .into_response();
     }
+    let reindex = crate::web::rescan_cycle(&state).await.is_some();
+    Json(serde_json::json!({
+        "ok": true,
+        "tagged": n,
+        "errors": errors,
+        "reindex": reindex,
+    }))
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,6 +1115,56 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_tags_never_truncates_on_failure() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-reorg-safe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 1) an unparseable "mp3": the read fails BEFORE any write — the
+        //    original bytes must survive untouched.
+        let p = dir.join("fake.mp3");
+        std::fs::write(&p, b"fake-audio-bytes-123456").unwrap();
+        let r = aria_audio::set_tags(
+            &p,
+            &aria_audio::TagEdit {
+                title: Some("x".into()),
+                ..Default::default()
+            },
+        );
+        assert!(r.is_err(), "unparseable file must fail: {r:?}");
+        assert_eq!(
+            std::fs::read(&p).unwrap(),
+            b"fake-audio-bytes-123456",
+            "the original must be untouched"
+        );
+        // 2) a 0-byte file is refused explicitly (a broken download).
+        let p2 = dir.join("empty.mp3");
+        std::fs::write(&p2, b"").unwrap();
+        let r2 = aria_audio::set_tags(
+            &p2,
+            &aria_audio::TagEdit {
+                title: Some("x".into()),
+                ..Default::default()
+            },
+        );
+        let err2 = r2.unwrap_err();
+        assert!(err2.contains("empty"), "0-byte files must be refused: {err2}");
+        assert_eq!(std::fs::metadata(&p2).unwrap().len(), 0);
+        // no temp litter left behind
+        assert!(dir
+            .read_dir()
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .all(|e| !e.file_name().to_string_lossy().contains(".aria-tmp")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn layout_parses_levels_and_presets() {
