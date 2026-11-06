@@ -47,6 +47,9 @@ pub struct Layout {
     pub artist: bool,
     pub album: bool,
     pub flat: bool,
+    /// Consolidate one-track "albums" into a single `Lose Titel` folder per
+    /// artist instead of minting a folder per loose file.
+    pub loose: bool,
 }
 
 impl Layout {
@@ -54,7 +57,7 @@ impl Layout {
         !self.language && !self.genre && !self.artist && !self.album
     }
 
-    /// "language-genre-artist-album" / the legacy presets
+    /// "language-genre-artist-album[-loose]" / the legacy presets
     /// (artist-album, artist-flat, flat, keep).
     pub fn parse(s: &str) -> Option<Layout> {
         let mut l = Layout::default();
@@ -65,9 +68,11 @@ impl Layout {
                 "genre" | "genres" => l.genre = true,
                 "artist" | "kuenstler" => l.artist = true,
                 "album" | "albums" => l.album = true,
+                "loose" | "lose" => l.loose = true,
                 "flat" => {
                     l = Layout {
                         flat: true,
+                        loose: l.loose,
                         ..Default::default()
                     };
                 }
@@ -99,6 +104,9 @@ impl Layout {
         }
         if self.album {
             v.push("album");
+        }
+        if self.loose {
+            v.push("loose");
         }
         v.join("-")
     }
@@ -277,7 +285,12 @@ fn bucket(s: &str, empty: &str) -> String {
     if b.is_empty() { empty.to_string() } else { b }
 }
 
-fn target_of(layout: &Layout, t: &aria_audio::Track, ext: &str) -> (Vec<String>, String) {
+fn target_of(
+    layout: &Layout,
+    t: &aria_audio::Track,
+    ext: &str,
+    singletons: &std::collections::HashSet<String>,
+) -> (Vec<String>, String) {
     // Keep: an empty, non-flat layout means "report only, no moves".
     if layout.is_empty() && !layout.flat {
         return (Vec::new(), String::new());
@@ -305,15 +318,22 @@ fn target_of(layout: &Layout, t: &aria_audio::Track, ext: &str) -> (Vec<String>,
         segs.push(bucket(&t.genre, "Sonstige"));
     }
     if layout.artist {
-        segs.push(if needs_work(&t.artist) {
-            "Unbekannt".to_string()
+        // Junky artist names (numeric, placeholder, …) all share ONE folder
+        // instead of minting "1", "2", "247E~1", …
+        segs.push(if artist_is_junk(&t.artist) {
+            "Unsortiert".to_string()
         } else {
             sanitize(&t.artist)
         });
     }
     if layout.album {
+        // Loose files: an album with exactly one track in the collection
+        // becomes `Lose Titel` per artist (no 100 one-song folders).
+        let loose = layout.loose && singletons.contains(&norm_cmp(&t.album));
         segs.push(if needs_work(&t.album) {
             "Ohne Album".to_string()
+        } else if loose {
+            "Lose Titel".to_string()
         } else {
             sanitize(&t.album)
         });
@@ -432,13 +452,27 @@ pub fn plan(
     let mut move_bytes = 0u64;
     let mut ambiguous = Vec::new();
 
+    // Albums that occur exactly once in this collection (normalized name):
+    // with `loose` they collapse into the per-artist `Lose Titel` folder.
+    let mut album_counts: BTreeMap<String, usize> = BTreeMap::new();
+    if kind == "music" {
+        for t in &tracks {
+            *album_counts.entry(norm_cmp(&t.album)).or_insert(0) += 1;
+        }
+    }
+    let singletons: std::collections::HashSet<String> = album_counts
+        .into_iter()
+        .filter(|(_, c)| *c == 1)
+        .map(|(k, _)| k)
+        .collect();
+
     for t in &tracks {
         let Ok(rel) = Path::new(&t.path).strip_prefix(root) else {
             continue;
         };
         let rel_s = rel.to_string_lossy().to_string();
         let ext = ext_of(&t.path);
-        let (segs, name) = target_of(&move_layout, t, &ext);
+        let (segs, name) = target_of(&move_layout, t, &ext, &singletons);
         let needs_catalog_fix = kind == "music"
             && (needs_work(&t.artist)
                 || needs_work(&t.album)
@@ -640,8 +674,30 @@ fn needs_work(s: &str) -> bool {
             | "various artists"
             | "diverse"
             | "artist"
+            | "autor"
             | "album"
+            // Default album names taggers/iTunes mint for loose files:
+            | "kein titel"
+            | "no title"
+            | "favorite music"
+            | "meine musik"
     )
+}
+
+/// An artist name that must not become its own folder: empty/placeholder
+/// (needs_work), 2 or fewer letters ("B-52", "247E~1"), ≤3 letters mixed
+/// with digits, or digits as common as letters ("0079"). Real short names
+/// without digits ("AC/DC", "A-ha", "ABBA") survive.
+fn artist_is_junk(s: &str) -> bool {
+    let n = s.trim();
+    if needs_work(n) {
+        return true;
+    }
+    let letters = n.chars().filter(|c| c.is_alphabetic()).count();
+    let digits = n.chars().filter(|c| c.is_ascii_digit()).count();
+    letters <= 2
+        || (letters <= 3 && digits >= 1)
+        || (digits >= 2 && digits >= letters)
 }
 
 fn push_ambiguous(v: &mut Vec<Value>, t: &aria_audio::Track) {
@@ -1179,6 +1235,85 @@ mod tests {
         assert_eq!(Layout::parse("keep").unwrap().as_str(), "keep");
         assert!(Layout::parse("language-artist").unwrap().as_str() == "language-artist");
         assert!(Layout::parse("bogus").is_none());
+        // the loose flag round-trips as a trailing token
+        let l = Layout::parse("language-genre-artist-album-loose").unwrap();
+        assert!(l.loose);
+        assert_eq!(l.as_str(), "language-genre-artist-album-loose");
+        assert!(!Layout::parse("artist-album").unwrap().loose);
+    }
+
+    #[test]
+    fn loose_collapses_single_track_albums() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-reorg-loose-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = dir.join("musik");
+        // Artist A: one single-track "album" (Solo) and a real 2-track one (Duo).
+        std::fs::create_dir_all(root.join("Alpha/Only")).unwrap();
+        std::fs::create_dir_all(root.join("Alpha/Pair")).unwrap();
+        std::fs::write(root.join("Alpha/Only/01 - x.mp3"), b"fake-solo-xxxx").unwrap();
+        std::fs::write(root.join("Alpha/Pair/01 - y.mp3"), b"fake-duo-yyyy").unwrap();
+        std::fs::write(root.join("Alpha/Pair/02 - z.mp3"), b"fake-duo-zzzz").unwrap();
+        let items = [aria_audio::CollectionItem {
+            name: "musik".into(),
+            kind: CollectionKind::Music,
+            path: root.clone(),
+        }];
+        let lib = aria_audio::Library::scan_collections(&items).unwrap();
+        assert_eq!(lib.len(), 3);
+
+        // Without loose: everything is already in place (no moves).
+        let p_keep = plan(
+            &lib,
+            &root,
+            "musik",
+            &Layout {
+                artist: true,
+                album: true,
+                ..Default::default()
+            },
+        );
+        assert!(p_keep.moves.is_empty(), "{:?}", p_keep.moves);
+
+        // With loose: the single-track album collapses into `Lose Titel`,
+        // the 2-track album keeps its own folder.
+        let p_loose = plan(
+            &lib,
+            &root,
+            "musik",
+            &Layout {
+                artist: true,
+                album: true,
+                loose: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(p_loose.moves.len(), 1, "{:?}", p_loose.moves);
+        assert_eq!(p_loose.moves[0].from, "Alpha/Only/01 - x.mp3");
+        assert_eq!(p_loose.moves[0].to, "Alpha/Lose Titel/01 - x.mp3");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn artist_junk_detection() {
+        // numeric / digit-heavy / placeholder names must not mint folders
+        assert!(artist_is_junk(""));
+        assert!(artist_is_junk("1"));
+        assert!(artist_is_junk("0079"));
+        assert!(artist_is_junk("247E~1"));
+        assert!(artist_is_junk("B-52"));
+        assert!(artist_is_junk("Artist"));
+        assert!(artist_is_junk("Autor"));
+        // real (short) names survive
+        assert!(!artist_is_junk("AC/DC"));
+        assert!(!artist_is_junk("A-ha"));
+        assert!(!artist_is_junk("ABBA"));
+        assert!(!artist_is_junk("Heidi Klum"));
     }
 
     #[test]
@@ -1366,7 +1501,7 @@ mod tests {
         );
 
         // artist-album with empty tags: the files land in the explicit
-        // "Unbekannt"/"Ohne Album" buckets (instead of being scattered at
+        // "Unsortiert"/"Ohne Album" buckets (instead of being scattered at
         // the collection root) — until their metadata is fixed.
         let plan_aa = plan(
             &lib,
@@ -1383,7 +1518,7 @@ mod tests {
             plan_aa
                 .moves
                 .iter()
-                .all(|m| m.to.starts_with("Unbekannt/Ohne Album/"))
+                .all(|m| m.to.starts_with("Unsortiert/Ohne Album/"))
         );
 
         // Now give the tracks tags (simulating the LLM apply-tags step) via

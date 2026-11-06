@@ -158,6 +158,8 @@ let reorgState = { plan: null, suggestions: [], accepted: new Set() };
 
 // The layout the user checks in the Organizer (fixed order: language →
 // genre → artist → album). No box = keep the current layout (report only).
+// "Lose Titel bündeln" appends the loose flag (one-track albums collapse
+// into a per-artist folder; junk artist names share "Unsortiert").
 function reorgLayoutSpec() {
   const dims = [
     $("ro-lang").checked ? "language" : null,
@@ -165,7 +167,9 @@ function reorgLayoutSpec() {
     $("ro-artist").checked ? "artist" : null,
     $("ro-album").checked ? "album" : null,
   ].filter(Boolean);
-  return dims.length ? dims.join("-") : "keep";
+  if (!dims.length) return "keep";
+  if ($("ro-loose").checked) dims.push("loose");
+  return dims.join("-");
 }
 
 async function loadReorgCollections() {
