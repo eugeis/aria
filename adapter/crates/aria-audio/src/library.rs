@@ -75,6 +75,13 @@ pub struct Track {
     pub title: String,
     pub artist: String,
     pub album: String,
+    /// The raw tag values BEFORE the folder fallbacks — the reorg layout
+    /// must bucket on these (the fallback would read the layout's own
+    /// folders, e.g. the language level, as artist/album).
+    #[serde(default)]
+    pub artist_raw: String,
+    #[serde(default)]
+    pub album_raw: String,
     pub genre: String,
     /// The language of the content (tag TLAN/LANGUAGE when present, else
     /// the LLM-suggested value written back by the reorg feature).
@@ -237,14 +244,13 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
             t.properties()
                 .duration()
                 .as_millis()
-                .min(u128::from(u64::MAX)) as u64 > 0
+                .min(u128::from(u64::MAX)) as u64
+                > 0
         })
         .unwrap_or(false);
     if !size_ok || !parses {
         restore(path, &backup)?;
-        return Err(
-            "tag write verification failed (size/parse) — original restored".to_string(),
-        );
+        return Err("tag write verification failed (size/parse) — original restored".to_string());
     }
     Ok(())
 }
@@ -455,8 +461,10 @@ impl Library {
                                 title,
                                 // The narrator, when tagged, doubles as the
                                 // "artist" (spoken by …).
-                                artist: meta.artist,
+                                artist: meta.artist.clone(),
                                 album: String::new(),
+                                artist_raw: meta.artist,
+                                album_raw: String::new(),
                                 genre: String::new(),
                                 language: meta.language,
                                 track_no: meta.track_no,
@@ -755,6 +763,10 @@ fn build_track(
         meta.title
     };
     let (folder_artist, folder_album) = folder_fallback(root, path);
+    // Raw tag values first (the reorg layout buckets on these, never on the
+    // folder fallbacks below).
+    let artist_raw = meta.artist.clone();
+    let album_raw = meta.album.clone();
     let artist = clean_artist(&if meta.artist.is_empty() {
         folder_artist
     } else {
@@ -771,6 +783,8 @@ fn build_track(
         title,
         artist,
         album,
+        artist_raw,
+        album_raw,
         genre: meta.genre,
         language: meta.language,
         track_no: meta.track_no,

@@ -280,11 +280,6 @@ fn looks_mojibake(s: &str) -> bool {
     false
 }
 
-fn bucket(s: &str, empty: &str) -> String {
-    let b = sanitize(s);
-    if b.is_empty() { empty.to_string() } else { b }
-}
-
 fn target_of(
     layout: &Layout,
     t: &aria_audio::Track,
@@ -315,27 +310,35 @@ fn target_of(
         });
     }
     if layout.genre {
-        segs.push(bucket(&t.genre, "Sonstige"));
+        // Placeholder/junk genres ("Favorite Music", "Other", …) share the
+        // `Sonstige` bucket.
+        segs.push(if needs_work(&t.genre) {
+            "Sonstige".to_string()
+        } else {
+            sanitize(&t.genre)
+        });
     }
     if layout.artist {
-        // Junky artist names (numeric, placeholder, …) all share ONE folder
-        // instead of minting "1", "2", "247E~1", …
-        segs.push(if artist_is_junk(&t.artist) {
+        // RAW tag value (never the folder fallback — the fallback would
+        // read the layout's own folders, e.g. the language level, as
+        // artist). Junky names (numeric, placeholder, …) all share ONE
+        // folder instead of minting "1", "2", "247E~1", …
+        segs.push(if artist_is_junk(&t.artist_raw) {
             "Unsortiert".to_string()
         } else {
-            sanitize(&t.artist)
+            sanitize(&t.artist_raw)
         });
     }
     if layout.album {
         // Loose files: an album with exactly one track in the collection
         // becomes `Lose Titel` per artist (no 100 one-song folders).
-        let loose = layout.loose && singletons.contains(&norm_cmp(&t.album));
-        segs.push(if needs_work(&t.album) {
+        let loose = layout.loose && singletons.contains(&norm_cmp(&t.album_raw));
+        segs.push(if needs_work(&t.album_raw) {
             "Ohne Album".to_string()
         } else if loose {
             "Lose Titel".to_string()
         } else {
-            sanitize(&t.album)
+            sanitize(&t.album_raw)
         });
     }
     (segs, name)
@@ -457,7 +460,7 @@ pub fn plan(
     let mut album_counts: BTreeMap<String, usize> = BTreeMap::new();
     if kind == "music" {
         for t in &tracks {
-            *album_counts.entry(norm_cmp(&t.album)).or_insert(0) += 1;
+            *album_counts.entry(norm_cmp(&t.album_raw)).or_insert(0) += 1;
         }
     }
     let singletons: std::collections::HashSet<String> = album_counts
@@ -681,6 +684,8 @@ fn needs_work(s: &str) -> bool {
             | "no title"
             | "favorite music"
             | "meine musik"
+            | "other"
+            | "unbekanntes genre"
     )
 }
 
@@ -695,9 +700,7 @@ fn artist_is_junk(s: &str) -> bool {
     }
     let letters = n.chars().filter(|c| c.is_alphabetic()).count();
     let digits = n.chars().filter(|c| c.is_ascii_digit()).count();
-    letters <= 2
-        || (letters <= 3 && digits >= 1)
-        || (digits >= 2 && digits >= letters)
+    letters <= 2 || (letters <= 3 && digits >= 1) || (digits >= 2 && digits >= letters)
 }
 
 fn push_ambiguous(v: &mut Vec<Value>, t: &aria_audio::Track) {
@@ -1211,14 +1214,18 @@ mod tests {
             },
         );
         let err2 = r2.unwrap_err();
-        assert!(err2.contains("empty"), "0-byte files must be refused: {err2}");
+        assert!(
+            err2.contains("empty"),
+            "0-byte files must be refused: {err2}"
+        );
         assert_eq!(std::fs::metadata(&p2).unwrap().len(), 0);
         // no temp litter left behind
-        assert!(dir
-            .read_dir()
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .all(|e| !e.file_name().to_string_lossy().contains(".aria-tmp")));
+        assert!(
+            dir.read_dir()
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .all(|e| !e.file_name().to_string_lossy().contains(".aria-tmp"))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1242,6 +1249,36 @@ mod tests {
         assert!(!Layout::parse("artist-album").unwrap().loose);
     }
 
+    fn minimal_mp3() -> Vec<u8> {
+        let mut v = b"ID3\x03\x00\x00".to_vec();
+        v.extend_from_slice(&[0, 0, 0, 0]); // zero-length tag
+        for _ in 0..4 {
+            v.extend_from_slice(&[0xff, 0xfb, 0x90, 0xc0]);
+            v.extend(std::iter::repeat_n(0u8, 413));
+        }
+        v
+    }
+
+    /// A real (parseable) MP3 with ID3 tags — the layout buckets on the RAW
+    /// tag values, so the fixtures must carry real tags.
+    fn tagged_mp3(dir: &std::path::Path, rel: &str, title: &str, artist: &str, album: &str) {
+        let p = dir.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&p, minimal_mp3()).unwrap();
+        aria_audio::set_tags(
+            &p,
+            &aria_audio::TagEdit {
+                title: Some(title.into()),
+                artist: Some(artist.into()),
+                album: Some(album.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
     #[test]
     fn loose_collapses_single_track_albums() {
         let dir = std::env::temp_dir().join(format!(
@@ -1253,12 +1290,11 @@ mod tests {
                 .as_nanos()
         ));
         let root = dir.join("musik");
-        // Artist A: one single-track "album" (Solo) and a real 2-track one (Duo).
-        std::fs::create_dir_all(root.join("Alpha/Only")).unwrap();
-        std::fs::create_dir_all(root.join("Alpha/Pair")).unwrap();
-        std::fs::write(root.join("Alpha/Only/01 - x.mp3"), b"fake-solo-xxxx").unwrap();
-        std::fs::write(root.join("Alpha/Pair/01 - y.mp3"), b"fake-duo-yyyy").unwrap();
-        std::fs::write(root.join("Alpha/Pair/02 - z.mp3"), b"fake-duo-zzzz").unwrap();
+        // Artist Alpha: one single-track "album" (Only) and a real 2-track
+        // one (Pair).
+        tagged_mp3(&root, "Alpha/Only/01 - x.mp3", "x", "Alpha", "Only");
+        tagged_mp3(&root, "Alpha/Pair/01 - y.mp3", "y", "Alpha", "Pair");
+        tagged_mp3(&root, "Alpha/Pair/02 - z.mp3", "z", "Alpha", "Pair");
         let items = [aria_audio::CollectionItem {
             name: "musik".into(),
             kind: CollectionKind::Music,
@@ -1657,8 +1693,7 @@ mod set_tags_in_place {
         // The audio tail (last MPEG frame) must survive the rewrite.
         assert!(
             bytes.len() >= (before as usize) - 50
-                && bytes[bytes.len().saturating_sub(4)..]
-                    == original[original.len() - 4..],
+                && bytes[bytes.len().saturating_sub(4)..] == original[original.len() - 4..],
             "the audio must survive the tag rewrite"
         );
         // And the new values are readable back.
