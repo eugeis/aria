@@ -58,11 +58,7 @@ impl Layout {
     /// (artist-album, artist-flat, flat, keep).
     pub fn parse(s: &str) -> Option<Layout> {
         let mut l = Layout::default();
-        for part in s
-            .trim()
-            .to_ascii_lowercase()
-            .split(['-', '_', ',', ' '])
-        {
+        for part in s.trim().to_ascii_lowercase().split(['-', '_', ',', ' ']) {
             match part.trim() {
                 "" => {}
                 "language" | "lang" | "sprache" => l.language = true,

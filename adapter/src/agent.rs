@@ -354,13 +354,18 @@ impl AgentBackend for BrainAgent {
     fn reorg_suggest(
         &self,
         tracks_json: &str,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> BoxFuture<'_, Result<String, AgentError>> {
         let tracks_json = tracks_json.to_string();
-        let http = self.http.clone();
         let base = self.base.clone();
         let token = self.token.clone();
+        // The shared client carries the voice-turn budget (~7.5 s) — an LLM
+        // batch takes longer, so this call gets its own timeout-bound client
+        // (built inside the future: the `?` cannot escape a BoxFuture body).
         Box::pin(async move {
+            let Ok(http) = reqwest::Client::builder().timeout(timeout).build() else {
+                return Err(AgentError::Connect("http client".into()));
+            };
             let mut req = http
                 .post(format!("{base}/api/workflows/reorg-suggest/run"))
                 .json(&serde_json::json!({ "tracks": tracks_json }));
