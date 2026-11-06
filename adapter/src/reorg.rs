@@ -1477,3 +1477,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod set_tags_in_place {
+    fn minimal_mp3() -> Vec<u8> {
+        let mut v = b"ID3\x03\x00\x00".to_vec();
+        v.extend_from_slice(&[0, 0, 0, 0]); // zero-length tag
+        // A few MPEG-1 Layer III frames (128kbps, 44.1kHz = 417 bytes each)
+        for _ in 0..4 {
+            v.extend_from_slice(&[0xff, 0xfb, 0x90, 0xc0]);
+            v.extend(std::iter::repeat_n(0u8, 413));
+        }
+        v
+    }
+
+    /// The live library hit this: an in-place tag rewrite must succeed,
+    /// keep the audio intact, and make the new values readable.
+    #[test]
+    fn in_place_rewrite_preserves_audio() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-tag-inplace-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("track.mp3");
+        let original = minimal_mp3();
+        std::fs::write(&p, &original).unwrap();
+        let before = std::fs::metadata(&p).unwrap().len();
+        let r = aria_audio::set_tags(
+            &p,
+            &aria_audio::TagEdit {
+                title: Some("Probe Title".into()),
+                genre: Some("Worship".into()),
+                language: Some("Deutsch".into()),
+                ..Default::default()
+            },
+        );
+        assert!(r.is_ok(), "in-place tag write must succeed: {r:?}");
+        let bytes = std::fs::read(&p).unwrap_or_default();
+        // The audio tail (last MPEG frame) must survive the rewrite.
+        assert!(
+            bytes.len() >= (before as usize) - 50
+                && bytes[bytes.len().saturating_sub(4)..]
+                    == original[original.len() - 4..],
+            "the audio must survive the tag rewrite"
+        );
+        // And the new values are readable back.
+        let (title, genre, language) = aria_audio::read_tag_summary(&p);
+        assert_eq!(title, "Probe Title");
+        assert_eq!(genre, "Worship");
+        assert_eq!(language, "Deutsch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

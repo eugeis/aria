@@ -7,7 +7,7 @@ pub mod search;
 
 pub use library::{
     CollectionItem, CollectionKind, Cover, Format, IdRegistry, Library, TagEdit, Track,
-    fingerprint_file, set_tags, slugify,
+    fingerprint_file, read_tag_summary, set_tags, slugify,
 };
 pub use player::{PlayerState, Repeat};
 pub use registry::{PlaybackRegistry, ResolvedStream, StreamSource};

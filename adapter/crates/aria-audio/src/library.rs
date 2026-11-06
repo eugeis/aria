@@ -170,22 +170,37 @@ pub struct TagEdit {
 /// fields are touched. Used by the reorg feature's "apply the LLM
 /// suggestions" step. Language is format-specific (TLAN / LANGUAGE /
 /// ©lang) and goes in as a raw item.
+///
+/// In-place via `BoundTaggedFile` (lofty's documented pattern — the tag is
+/// rewritten around the untouched audio; a write-only fd would break
+/// lofty's internal seeks). The original bytes are kept in memory and
+/// restored when the result fails verification (parseable, size sane).
 pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
-    use lofty::file::TaggedFileExt;
+    use lofty::file::{BoundTaggedFile, TaggedFileExt};
     use lofty::tag::Accessor;
     // A 0-byte file is a broken download — refuse with a clear diagnostic
     // instead of a cryptic parser error (and never touch it).
     if fs::metadata(path).map(|m| m.len()).unwrap_or(0) == 0 {
         return Err("file is empty (0 bytes) — refusing to tag a broken file".to_string());
     }
-    let mut tagged = lofty::read_from_path(path).map_err(|e| e.to_string())?;
+    let backup = fs::read(path).map_err(|e| e.to_string())?;
+    let restore = |path: &Path, backup: &[u8]| -> Result<(), String> {
+        fs::write(path, backup).map_err(|e| format!("restore failed: {e}"))
+    };
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    let mut bound = BoundTaggedFile::read_from(file, lofty::config::ParseOptions::default())
+        .map_err(|e| e.to_string())?;
     {
-        let tag = match tagged.primary_tag_mut() {
+        let tag = match bound.primary_tag_mut() {
             Some(t) => t,
             None => {
-                let tt = tagged.file_type().primary_tag_type();
-                let _ = tagged.insert_tag(lofty::tag::Tag::new(tt));
-                tagged
+                let tt = bound.file_type().primary_tag_type();
+                let _ = bound.insert_tag(lofty::tag::Tag::new(tt));
+                bound
                     .primary_tag_mut()
                     .ok_or("could not create a tag for this format")?
             }
@@ -209,25 +224,48 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
             ));
         }
     }
-    // Never truncate the original in place: write to a sibling temp file and
-    // rename over it (atomic on the same fs). Any failure leaves the audio
-    // untouched.
-    let tmp = path.with_file_name(format!(
-        ".{}.aria-tmp",
-        path.file_name().and_then(|s| s.to_str()).unwrap_or("file")
-    ));
-    let result = (|| -> Result<(), String> {
-        let mut out = fs::File::create(&tmp).map_err(|e| e.to_string())?;
-        tagged
-            .save_to(&mut out, lofty::config::WriteOptions::default())
-            .map_err(|e| e.to_string())?;
-        out.sync_all().map_err(|e| e.to_string())?;
-        fs::rename(&tmp, path).map_err(|e| e.to_string())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
+    bound
+        .save(lofty::config::WriteOptions::default())
+        .map_err(|e| e.to_string())?;
+    // Verify the audio survived: still parseable, and the size moved only by
+    // the delta of the (small) tag, not by losing the audio.
+    let new_len = fs::metadata(path).map(|m| m.len()).unwrap_or(0) as i64;
+    let old_len = backup.len() as i64;
+    let size_ok = new_len >= old_len - 4096 && new_len <= old_len + 262_144;
+    let parses = lofty::read_from_path(path)
+        .map(|t| {
+            t.properties()
+                .duration()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64 > 0
+        })
+        .unwrap_or(false);
+    if !size_ok || !parses {
+        restore(path, &backup)?;
+        return Err(
+            "tag write verification failed (size/parse) — original restored".to_string(),
+        );
     }
-    result
+    Ok(())
+}
+
+/// Read back (title, genre, language) from a file's primary tag — used to
+/// verify `set_tags` results. Missing tag/fields come back empty.
+pub fn read_tag_summary(path: &Path) -> (String, String, String) {
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::Accessor;
+    let mut out = (String::new(), String::new(), String::new());
+    if let Ok(tagged) = lofty::read_from_path(path) {
+        if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
+            out.0 = tag.title().unwrap_or_default().to_string();
+            out.1 = tag.genre().unwrap_or_default().to_string();
+            out.2 = tag
+                .get_string(&lofty::tag::ItemKey::Language)
+                .unwrap_or_default()
+                .to_string();
+        }
+    }
+    out
 }
 
 /// The persistent track-id registry: content fingerprint → stable id.
