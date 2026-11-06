@@ -159,6 +159,24 @@ app:
         # something else on the node.
         memory: "512Mi"
 
+# ADR 0162: the default tenant is a PROVISIONED row, not a hardcoded const.
+# The `app.realms.tenant.seed` above is the default-instance provisioning
+# spec; this makes the boot provisioning explicit (and observable over
+# GET /api/realms/instances). The app lens materializes it idempotently at
+# boot (the `app_ready` pass) into the persisted instance store. A second
+# `boot` entry (or an event-driven `source` + `target.realm`) would add
+# further tenants without touching resolution.
+provisioning:
+  - name: default-tenant
+    boot: true
+    target:
+      realm: tenant
+      id: aria
+      name: "Aria"
+      slug: aria
+      owner: admin
+      description: "The household tenant (default instance)"
+
 # ADR 0017: the brain's LLM — house policy: ALL mosaic apps run their
 # operations on OpenRouter (MOAIC_CHAT_API_KEY carries the key; on li7 the
 # runner file /home/ee/.ssh/openrouter, shared with the pages app).
