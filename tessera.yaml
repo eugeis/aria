@@ -670,7 +670,7 @@ workflows:
   # The user reviews + applies them in the web UI (the LLM never touches
   # the files itself). OpenRouter (chat) — one structured call per batch.
   - name: reorg-suggest
-    about: "Catalog suggestions for ambiguous library tracks: normalized artist/album/title (+ collection for sermons) from the file name, tags and context. Output: {suggestions: [{index, artist, album, title, collection, reason}]} — only the fields worth changing."
+    about: "Catalog suggestions for library tracks: normalized artist/album/title, language and genre (+ collection for sermons) from the file name, tags and context. Output: {suggestions: [{index, artist, album, title, genre, language, collection, reason}]} — only the fields worth changing."
     nodes:
       - type: start
         id: start_1
@@ -679,22 +679,20 @@ workflows:
           variables:
             - name: tracks
               ty: String
-              about: "JSON array of ambiguous tracks: {index, title, artist, album, collection, kind, file, duration_ms}."
+              about: "JSON array of tracks: {index, title, artist, album, genre, language, collection, kind, file, duration_ms}."
       - type: llm
         id: suggest
         props:
           title: Suggest normalized catalog data
           model:
             model: chat
-        json_schema: '{"type": "object", "properties": {"suggestions": {"type": "array", "items": {"type": "object", "properties": {"index": {"type": "number"}, "artist": {"type": "string"}, "album": {"type": "string"}, "title": {"type": "string"}, "collection": {"type": "string"}, "reason": {"type": "string"}}, "required": ["index", "reason"]}}}, "required": ["suggestions"]}'
+        json_schema: '{"type": "object", "properties": {"suggestions": {"type": "array", "items": {"type": "object", "properties": {"index": {"type": "number"}, "artist": {"type": "string"}, "album": {"type": "string"}, "title": {"type": "string"}, "genre": {"type": "string"}, "language": {"type": "string"}, "collection": {"type": "string"}, "reason": {"type": "string"}}, "required": ["index", "reason"]}}}, "required": ["suggestions"]}'
         prompt:
           - role: system
             content: |
               You are the cataloguer of a personal media library (music,
               audiobooks, German sermon/seminar recordings). You receive a
-              batch of tracks whose metadata is missing or messy (empty
-              artist/album, file-name titles with dates or numbering,
-              mis-grouped series). For EACH track, suggest the normalized
+              batch of tracks. For EACH track, suggest the normalized
               values — but ONLY for fields that actually need fixing:
               * artist: the performing artist / the speaker (sermons) / the
                 narrator (audiobooks). Empty when genuinely unknown.
@@ -703,6 +701,23 @@ workflows:
               * title: the clean spoken title (drop file numbering like
                 "01 - " and date prefixes like "2019-05-12 - " — keep the
                 rest verbatim, do NOT translate).
+              * genre: a short genre in German or the artist's own
+                convention (e.g. "Worship", "Rock", "Klassik", "Hymne",
+                "Jazz", "Gospel", "Chanson"). For sermons/seminars use
+                "Predigt" or "Seminar". Only when the given genre is empty
+                or wrong; leave empty when you cannot judge.
+              * language: the language the track is SPOKEN/SUNG in, as a
+                plain name: "Deutsch" or "Englisch" (also "Französisch",
+                "Spanisch", "Latein", "Russisch", "Griechisch",
+                "Hebräisch", …). Judge from title/artist/album; worship
+                songs in English stay "Englisch" even in a German church.
+                Only when the given language is empty or wrong.
+              * ENCODING REPAIR: values that look like character-encoding
+                damage (e.g. "Panflцte", "FrostÃ¶de", "SängerinÃ¼bung" —
+                Cyrillic letters inside Latin words, or "Ã"/"Â"/"â€"
+                sequences) must be repaired to the correct spelling
+                ("Panflöte", "Frostöde", …). This counts as a fix — say so
+                in the reason ("Zeichensatz repariert").
               * collection: only when you are confident the track belongs
                 to a DIFFERENT collection than the one given.
               * reason: one short clause (German) why you changed it.

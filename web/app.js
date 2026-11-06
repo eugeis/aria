@@ -154,15 +154,19 @@ $("pp-close").addEventListener("click", () => {
 
 // ── reorganizer (layout moves, dedupe, LLM catalog suggestions) ─────────
 
-let reorgState = { style: "artist-album", plan: null, suggestions: [], accepted: new Set() };
+let reorgState = { plan: null, suggestions: [], accepted: new Set() };
 
-$("reorg-style").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-style]");
-  if (!b) return;
-  reorgState.style = b.dataset.style;
-  document.querySelectorAll("#reorg-style button").forEach((x) => x.classList.remove("active"));
-  b.classList.add("active");
-});
+// The layout the user checks in the Organizer (fixed order: language →
+// genre → artist → album). No box = keep the current layout (report only).
+function reorgLayoutSpec() {
+  const dims = [
+    $("ro-lang").checked ? "language" : null,
+    $("ro-genre").checked ? "genre" : null,
+    $("ro-artist").checked ? "artist" : null,
+    $("ro-album").checked ? "album" : null,
+  ].filter(Boolean);
+  return dims.length ? dims.join("-") : "keep";
+}
 
 async function loadReorgCollections() {
   const sel = $("reorg-collection");
@@ -178,7 +182,7 @@ async function doReorgPlan() {
   box.textContent = "Plane …";
   let r;
   try {
-    r = await api(`/dl/reorg/plan?style=${reorgState.style}&collection=${encodeURIComponent(col)}`);
+    r = await api(`/dl/reorg/plan?layout=${encodeURIComponent(reorgLayoutSpec())}&collection=${encodeURIComponent(col)}`);
   } catch (e) {
     box.textContent = "";
     return toast(e.message, true);
@@ -189,7 +193,10 @@ async function doReorgPlan() {
   reorgState.suggestions = [];
   reorgState.accepted.clear();
   const gb = p.move_bytes / 1048576;
-  box.textContent = `${p.kind} · ${p.moves.length} Verschiebungen (${gb.toFixed(1)} MB) · ${p.duplicates.length} Duplikat-Gruppen · ${p.ambiguous.length} Titel mit dünnem Katalog`;
+  box.textContent =
+    `${p.kind} · Layout ${p.layout} · ${p.moves.length} Verschiebungen (${gb.toFixed(1)} MB) · ` +
+    `${p.duplicates.length} Duplikat-Gruppen` +
+    (p.tag_stats ? ` · Katalog: ${p.tag_stats.total} Titel, ${p.tag_stats.missing_language} ohne Sprache, ${p.tag_stats.missing_genre} ohne Genre, ${p.tag_stats.mojibake} verdächtige Zeichensätze` : "");
   const moves = $("reorg-moves");
   moves.innerHTML = p.moves.length
     ? p.moves
@@ -206,12 +213,35 @@ async function doReorgPlan() {
     : `<p class="muted">Alles ist schon im Ziellayout.</p>`;
   $("reorg-apply").classList.toggle("hidden", p.moves.length === 0 || isReadOnly());
   renderDupes(p.duplicates);
-  $("reorg-amb-count").textContent = p.ambiguous.length
-    ? `${p.ambiguous.length} Titel ohne sauberen Künstler/Album — LLM-Vorschläge:`
+  const passList = reorgPassList();
+  $("reorg-amb-count").textContent = passList.length
+    ? `${passList.length} Titel brauchen Katalogarbeit (Künstler/Album/Sprache/Genre) — LLM-Vorschläge:`
     : "Katalog sieht vollständig aus.";
-  $("reorg-suggest").disabled = p.ambiguous.length === 0 || isReadOnly();
+  $("reorg-suggest").disabled = passList.length === 0 || isReadOnly();
   $("reorg-suggests").innerHTML = "";
   $("reorg-apply-suggest").classList.add("hidden");
+}
+
+// The LLM metadata pass: every track that is ambiguous OR still lacks
+// language/genre (the two new layout dimensions).
+function reorgPassList() {
+  const p = reorgState.plan;
+  if (!p) return [];
+  const ambIds = new Set((p.ambiguous || []).map((a) => a.track_id));
+  return (p.tracks || [])
+    .filter((t) => ambIds.has(t.id) || !(t.language || "").trim() || !(t.genre || "").trim())
+    .map((t, i) => ({
+      index: i,
+      track_id: t.id,
+      title: t.title,
+      artist: t.artist,
+      album: t.album,
+      genre: t.genre,
+      language: t.language,
+      collection: p.collection,
+      kind: "music",
+      file: t.file,
+    }));
 }
 
 function renderDupes(groups) {
@@ -274,7 +304,7 @@ $("reorg-apply").addEventListener("click", async () => {
   try {
     const r = await api("/dl/reorg/apply", {
       method: "POST",
-      body: JSON.stringify({ style: reorgState.style, collection: $("reorg-collection").value }),
+      body: JSON.stringify({ layout: reorgLayoutSpec(), collection: $("reorg-collection").value }),
     });
     toast(`${r.moved} verschoben${r.failed?.length ? ` · ${r.failed.length} fehlgeschlagen` : ""}${r.reindex ? ", Reindex gestartet" : ""}`);
     if (r.failed?.length) console.warn(r.failed);
@@ -288,17 +318,17 @@ $("reorg-apply").addEventListener("click", async () => {
 });
 
 $("reorg-suggest").addEventListener("click", async () => {
-  const amb = reorgState.plan?.ambiguous || [];
-  if (!amb.length) return;
+  const passList = reorgPassList();
+  if (!passList.length) return;
   $("reorg-suggest").disabled = true;
-  $("reorg-amb-count").textContent = `LLM liest ${amb.length} Titel ein (OpenRouter) …`;
+  $("reorg-amb-count").textContent = `LLM liest ${passList.length} Titel ein (OpenRouter) …`;
   try {
-    const r = await api("/dl/reorg/suggest", { method: "POST", body: JSON.stringify({ tracks: amb }) });
+    const r = await api("/dl/reorg/suggest", { method: "POST", body: JSON.stringify({ tracks: passList }) });
     reorgState.suggestions = r.suggestions || [];
     reorgState.accepted = new Set();
     renderSuggestions();
   } catch (err) {
-    $("reorg-amb-count").textContent = `${amb.length} Titel mit dünnem Katalog.`;
+    $("reorg-amb-count").textContent = `${passList.length} Titel brauchen Katalogarbeit.`;
     toast(err.message, true);
   } finally {
     $("reorg-suggest").disabled = isReadOnly();
@@ -306,7 +336,7 @@ $("reorg-suggest").addEventListener("click", async () => {
 });
 
 function renderSuggestions() {
-  const amb = reorgState.plan?.ambiguous || [];
+  const passList = reorgPassList();
   const box = $("reorg-suggests");
   if (!reorgState.suggestions.length) {
     box.innerHTML = `<p class="muted">Keine Vorschläge erhalten.</p>`;
@@ -315,13 +345,13 @@ function renderSuggestions() {
   }
   box.innerHTML = reorgState.suggestions
     .map((sg) => {
-      const t = amb.find((a) => a.track_id === sg.index) || amb.find((a) => a.index === sg.index) || {};
-      const show = (k) => sg[k] ? `<b>${esc(sg[k])}</b>` : `<span class="muted">${esc(t[k] || "—")}</span>`;
+      const t = passList.find((a) => a.track_id === sg.track_id) || passList[sg.index] || passList.find((a) => a.index === sg.index) || {};
+      const show = (k) => (sg[k] ? `<b>${esc(sg[k])}</b>` : `<span class="muted">${esc(t[k] || "—")}</span>`);
       return `
     <div class="pl-row">
-      <span class="t-no"><input type="checkbox" data-sugg-acc="${sg.index}" title="Übernehmen"></span>
+      <span class="t-no"><input type="checkbox" data-sugg-acc="${sg.index}" data-sugg-id="${esc(t.track_id ?? "")}" title="Übernehmen"></span>
       <span class="t-title">${esc(t.title || sg.title || "?")}</span>
-      <span class="t-meta muted">Künstler: ${show("artist")} · Album: ${show("album")}${sg.reason ? ` · <i>${esc(sg.reason)}</i>` : ""}</span>
+      <span class="t-meta muted">Künstler: ${show("artist")} · Album: ${show("album")} · Sprache: ${show("language")} · Genre: ${show("genre")}${sg.reason ? ` · <i>${esc(sg.reason)}</i>` : ""}</span>
       <span class="t-dur"></span><span class="t-actions"></span>
     </div>`;
     }).join("");
@@ -338,22 +368,32 @@ document.addEventListener("change", (e) => {
 
 $("reorg-apply-suggest").addEventListener("click", async () => {
   if (!reorgState.accepted.size) return toast("Nichts akzeptiert (Häkchen setzen)", true);
-  const amb = reorgState.plan?.ambiguous || [];
+  const passList = reorgPassList();
   const items = [...reorgState.accepted]
     .map((i) => {
       const sg = reorgState.suggestions.find((s) => String(s.index) === String(i));
-      const t = amb.find((a) => String(a.track_id) === String(i)) || amb.find((a) => String(a.index) === String(i));
+      const t = passList[Number(i)] || passList.find((a) => String(a.index) === String(i));
       if (!sg || !t) return null;
-      return [t.track_id, sg.title || t.title, sg.artist ?? "", sg.album ?? ""];
+      // [track_id, title, artist, album, genre, language] — empty string =
+      // leave the field untouched (the old value stays).
+      return [
+        t.track_id,
+        sg.title || t.title || "",
+        sg.artist ?? "",
+        sg.album ?? "",
+        sg.genre ?? "",
+        sg.language ?? "",
+      ];
     })
     .filter(Boolean);
   if (!items.length) return;
-  if (!confirm(`${items.length} Titel neu tagen? (schreibt ID3-Tags, dann Rescan + Reindex)`)) return;
+  if (!confirm(`${items.length} Titel neu tagen? (schreibt ID3-Tags: Titel, Künstler, Album, Genre, Sprache — dann Rescan + Reindex)`)) return;
   try {
     const r = await api("/dl/reorg/apply-tags", { method: "POST", body: JSON.stringify({ items }) });
     toast(`${r.tagged} getaggt${r.reindex ? ", Reindex gestartet" : ""}`);
     reorgState.accepted.clear();
     renderSuggestions();
+    doReorgPlan();
     loadLibrary();
   } catch (err) {
     toast(err.message, true);

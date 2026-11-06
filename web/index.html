@@ -124,17 +124,16 @@
   <!-- REORGANIZER -->
   <section id="tab-reorg" class="tab">
     <p class="muted">
-      Alte Sammlungen aufräumen: Dateien/Ordner in ein sauberes Layout verschieben
-      (Künstler/Album), Duplikate entfernen, verhuschte Katalogdaten per LLM korrigieren.
-      IDs, Einbettungen und Playlists bleiben erhalten. <b>Änderungen: nur Admin.</b>
+      Bibliothek aufordnen: Ordnerhierarchy wählen, Dateien per LLM mit sauberen
+      Katalogdaten (Künstler, Album, Sprache, Genre) versorgen, dann alles in das
+      Ziellayout verschieben. IDs, Einbettungen und Playlists bleiben erhalten.
+      <b>Änderungen: nur Admin.</b>
     </p>
     <div class="row">
-      <div class="seg" id="reorg-style">
-        <button data-style="artist-album" class="active">Künstler/Album</button>
-        <button data-style="artist-flat">Künstler</button>
-        <button data-style="flat">Flach</button>
-        <button data-style="keep">Nur prüfen</button>
-      </div>
+      <label class="chk"><input type="checkbox" id="ro-lang" checked> Sprache</label>
+      <label class="chk"><input type="checkbox" id="ro-genre" checked> Genre</label>
+      <label class="chk"><input type="checkbox" id="ro-artist" checked> Künstler</label>
+      <label class="chk"><input type="checkbox" id="ro-album" checked> Album</label>
       <select id="reorg-collection"></select>
       <button id="reorg-plan">Vorschau</button>
       <button id="reorg-apply" class="ghost danger hidden">✂ Verschieben durchführen</button>
@@ -143,13 +142,17 @@
     <div id="reorg-moves" class="pl-items"></div>
     <h3>Duplikate (gleicher Inhalt)</h3>
     <div id="reorg-dupes"></div>
-    <h3>Katalog-Vorschläge (LLM)</h3>
+    <h3>Katalog (LLM)</h3>
     <div class="row">
       <span id="reorg-amb-count" class="muted"></span>
       <span class="spacer"></span>
-      <button id="reorg-suggest" class="ghost" disabled>Vorschläge erstellen</button>
+      <button id="reorg-suggest" class="ghost" disabled>Katalog-Vorschläge erstellen</button>
       <button id="reorg-apply-suggest" class="ghost hidden">✔ Akzeptierte übernehmen</button>
     </div>
+    <p class="muted" style="margin:0 0 8px">
+      Vorschläge decken fehlende/vermurkste Felder <b>und</b> fehlende Sprache/Genre ab —
+      „übernehmen“ schreibt die ID3-Tags (Titel, Künstler, Album, Genre, Sprache), danach Rescan + Reindex.
+    </p>
     <div id="reorg-suggests" class="pl-items"></div>
   </section>
 

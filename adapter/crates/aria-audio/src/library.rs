@@ -76,6 +76,10 @@ pub struct Track {
     pub artist: String,
     pub album: String,
     pub genre: String,
+    /// The language of the content (tag TLAN/LANGUAGE when present, else
+    /// the LLM-suggested value written back by the reorg feature).
+    #[serde(default)]
+    pub language: String,
     pub track_no: Option<u32>,
     pub duration_ms: u64,
     /// Average bitrate in kbps; used to translate a millisecond offset into a
@@ -151,16 +155,22 @@ fn fnv1a_str(s: &str) -> u64 {
     h
 }
 
-/// Write the given title/artist/album values into the file's primary tag
-/// (creating one when missing — the format's native tag type). Only the
-/// provided (non-None) fields are touched. Used by the reorg feature's
-/// "apply the LLM suggestions" step.
-pub fn set_tags(
-    path: &Path,
-    title: Option<&str>,
-    artist: Option<&str>,
-    album: Option<&str>,
-) -> Result<(), String> {
+/// The fields a tag edit may touch; `None` = leave untouched.
+#[derive(Debug, Clone, Default)]
+pub struct TagEdit {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+    pub language: Option<String>,
+}
+
+/// Write the given values into the file's primary tag (creating one when
+/// missing — the format's native tag type). Only the provided (non-None)
+/// fields are touched. Used by the reorg feature's "apply the LLM
+/// suggestions" step. Language is format-specific (TLAN / LANGUAGE /
+/// ©lang) and goes in as a raw item.
+pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
     use lofty::file::TaggedFileExt;
     use lofty::tag::Accessor;
     let mut tagged = lofty::read_from_path(path).map_err(|e| e.to_string())?;
@@ -175,14 +185,23 @@ pub fn set_tags(
                     .ok_or("could not create a tag for this format")?
             }
         };
-        if let Some(v) = title {
-            tag.set_title(v.to_string());
+        if let Some(v) = &edit.title {
+            tag.set_title(v.clone());
         }
-        if let Some(v) = artist {
-            tag.set_artist(v.to_string());
+        if let Some(v) = &edit.artist {
+            tag.set_artist(v.clone());
         }
-        if let Some(v) = album {
-            tag.set_album(v.to_string());
+        if let Some(v) = &edit.album {
+            tag.set_album(v.clone());
+        }
+        if let Some(v) = &edit.genre {
+            tag.set_genre(v.clone());
+        }
+        if let Some(v) = &edit.language {
+            tag.push(lofty::tag::TagItem::new(
+                lofty::tag::ItemKey::Language,
+                lofty::tag::ItemValue::Text(v.clone()),
+            ));
         }
     }
     let mut out = fs::File::create(path).map_err(|e| e.to_string())?;
@@ -381,6 +400,7 @@ impl Library {
                                 artist: meta.artist,
                                 album: String::new(),
                                 genre: String::new(),
+                                language: meta.language,
                                 track_no: meta.track_no,
                                 duration_ms: meta.duration_ms,
                                 avg_bitrate_kbps: meta.bitrate_kbps,
@@ -590,6 +610,7 @@ struct Meta {
     artist: String,
     album: String,
     genre: String,
+    language: String,
     track_no: Option<u32>,
     duration_ms: u64,
     bitrate_kbps: u32,
@@ -602,6 +623,7 @@ fn read_meta(path: &Path) -> Meta {
         artist: String::new(),
         album: String::new(),
         genre: String::new(),
+        language: String::new(),
         track_no: None,
         duration_ms: 0,
         bitrate_kbps: 0,
@@ -625,6 +647,12 @@ fn read_meta(path: &Path) -> Meta {
         meta.artist = tag.artist().unwrap_or_default().to_string();
         meta.album = tag.album().unwrap_or_default().to_string();
         meta.genre = tag.genre().unwrap_or_default().to_string();
+        // Language is format-specific (TLAN / LANGUAGE / ©lang) and not part
+        // of lofty's common Accessor set — read it by item key.
+        meta.language = tag
+            .get_string(&lofty::tag::ItemKey::Language)
+            .unwrap_or_default()
+            .to_string();
         meta.track_no = tag
             .get_string(&lofty::tag::ItemKey::TrackNumber)
             .and_then(|v| v.parse().ok());
@@ -686,6 +714,7 @@ fn build_track(
         artist,
         album,
         genre: meta.genre,
+        language: meta.language,
         track_no: meta.track_no,
         duration_ms: meta.duration_ms,
         avg_bitrate_kbps: meta.bitrate_kbps,

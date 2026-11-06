@@ -35,36 +35,76 @@ use crate::state::AppState;
 // styles
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Style {
-    /// `Artist/Album/NN - title.ext` (missing artist/album levels dropped).
-    ArtistAlbum,
-    /// `Artist/NN - title.ext` (no album grouping).
-    ArtistFlat,
-    /// Everything flat in the collection root: `NN - title.ext`.
-    Flat,
-    /// No moves (report only).
-    Keep,
+/// The grouping hierarchy for a music layout. Levels are fixed in the
+/// order language → genre → artist → album; the user picks which levels to
+/// include (the preset names map onto combinations). `flat` = every file
+/// straight into the collection root; an empty non-flat layout = Keep
+/// (report only, no moves).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+pub struct Layout {
+    pub language: bool,
+    pub genre: bool,
+    pub artist: bool,
+    pub album: bool,
+    pub flat: bool,
 }
 
-impl Style {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Style::ArtistAlbum => "artist-album",
-            Style::ArtistFlat => "artist-flat",
-            Style::Flat => "flat",
-            Style::Keep => "keep",
-        }
+impl Layout {
+    pub fn is_empty(&self) -> bool {
+        !self.language && !self.genre && !self.artist && !self.album
     }
-}
 
-pub fn parse_style(s: &str) -> Option<Style> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "artist-album" | "artist_album" | "standard" => Some(Style::ArtistAlbum),
-        "artist-flat" | "artist_flat" => Some(Style::ArtistFlat),
-        "flat" => Some(Style::Flat),
-        "keep" | "none" => Some(Style::Keep),
-        _ => None,
+    /// "language-genre-artist-album" / the legacy presets
+    /// (artist-album, artist-flat, flat, keep).
+    pub fn parse(s: &str) -> Option<Layout> {
+        let mut l = Layout::default();
+        for part in s
+            .trim()
+            .to_ascii_lowercase()
+            .split(['-', '_', ',', ' '])
+        {
+            match part.trim() {
+                "" => {}
+                "language" | "lang" | "sprache" => l.language = true,
+                "genre" | "genres" => l.genre = true,
+                "artist" | "kuenstler" => l.artist = true,
+                "album" | "albums" => l.album = true,
+                "flat" => {
+                    l = Layout {
+                        flat: true,
+                        ..Default::default()
+                    };
+                }
+                "keep" | "none" => {
+                    l = Layout::default();
+                }
+                _ => return None,
+            }
+        }
+        Some(l)
+    }
+
+    pub fn as_str(&self) -> String {
+        if self.flat {
+            return "flat".to_string();
+        }
+        if self.is_empty() {
+            return "keep".to_string();
+        }
+        let mut v = Vec::new();
+        if self.language {
+            v.push("language");
+        }
+        if self.genre {
+            v.push("genre");
+        }
+        if self.artist {
+            v.push("artist");
+        }
+        if self.album {
+            v.push("album");
+        }
+        v.join("-")
     }
 }
 
@@ -175,7 +215,77 @@ fn nn_of(t: &aria_audio::Track) -> String {
     "00".to_string()
 }
 
-fn target_of(style: Style, t: &aria_audio::Track, ext: &str) -> (Vec<String>, String) {
+/// TLAN carries "code|Description" ("deu|G") — try both parts against the
+/// common ISO codes / short names and return a German display name for
+/// the folder (unknown values pass through, sanitized).
+fn lang_display(s: &str) -> String {
+    let parts: Vec<String> = s
+        .split('|')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect();
+    let describe = |p: &str| -> Option<&'static str> {
+        match p.to_lowercase().as_str() {
+            "de" | "deu" | "ger" | "g" | "german" | "deutsch" => Some("Deutsch"),
+            "en" | "eng" | "e" | "english" => Some("Englisch"),
+            "fr" | "fra" | "fre" | "french" | "französisch" => Some("Französisch"),
+            "es" | "spa" | "esp" | "spanish" | "spanisch" => Some("Spanisch"),
+            "it" | "ita" | "itn" | "italian" | "italienisch" => Some("Italienisch"),
+            "pt" | "por" | "portuguese" | "portugiesisch" => Some("Portugiesisch"),
+            "nl" | "nld" | "dut" | "dutch" | "niederländisch" => Some("Niederländisch"),
+            "la" | "lat" | "latin" | "lateinisch" => Some("Latein"),
+            "ru" | "rus" | "russian" | "russisch" => Some("Russisch"),
+            "grc" | "grk" | "el" | "greek" | "griechisch" => Some("Griechisch"),
+            "he" | "heb" | "hebrew" | "hebräisch" => Some("Hebräisch"),
+            _ => None,
+        }
+    };
+    for p in &parts {
+        if let Some(d) = describe(p) {
+            return sanitize(d);
+        }
+    }
+    sanitize(parts.last().map(String::as_str).unwrap_or(s.trim()))
+}
+
+/// Heuristic for encoding corruption (mojibake): Cyrillic letters inside an
+/// otherwise Latin word ("Panflцte" for "Panflöte"), or the classic
+/// UTF-8-read-as-Windows double encoding — "Ã"/"Â" followed by a char from
+/// the U+0080..U+00BF block ("FrostÃ¶de"), or "â€" (double-encoded dash).
+fn looks_mojibake(s: &str) -> bool {
+    let cyr = s
+        .chars()
+        .filter(|c| ('\u{0400}'..='\u{04FF}').contains(c))
+        .count();
+    if cyr >= 1 && s.chars().filter(|c| c.is_ascii_alphabetic()).count() >= 3 {
+        return true;
+    }
+    let cs: Vec<char> = s.chars().collect();
+    for w in 0..cs.len() {
+        if (cs[w] == 'Ã' || cs[w] == 'Â')
+            && w + 1 < cs.len()
+            && ('\u{0080}'..='\u{00BF}').contains(&cs[w + 1])
+        {
+            return true;
+        }
+        if cs[w] == 'â' && w + 1 < cs.len() && cs[w + 1] == '€' {
+            return true;
+        }
+    }
+    false
+}
+
+fn bucket(s: &str, empty: &str) -> String {
+    let b = sanitize(s);
+    if b.is_empty() { empty.to_string() } else { b }
+}
+
+fn target_of(layout: &Layout, t: &aria_audio::Track, ext: &str) -> (Vec<String>, String) {
+    // Keep: an empty, non-flat layout means "report only, no moves".
+    if layout.is_empty() && !layout.flat {
+        return (Vec::new(), String::new());
+    }
     let nn = nn_of(t);
     let raw = match t.kind {
         CollectionKind::Music => title_clean(&t.title).to_string(),
@@ -187,29 +297,32 @@ fn target_of(style: Style, t: &aria_audio::Track, ext: &str) -> (Vec<String>, St
     // file-name part gets the same safety pass as folder names.
     let base = sanitize(&raw);
     let name = format!("{nn} - {base}.{ext}");
-    let artist = sanitize(&t.artist);
-    let album = sanitize(&t.album);
-    match style {
-        Style::ArtistAlbum => {
-            let mut segs = Vec::new();
-            if !artist.is_empty() {
-                segs.push(artist);
-            }
-            if !album.is_empty() {
-                segs.push(album);
-            }
-            (segs, name)
-        }
-        Style::ArtistFlat => {
-            let mut segs = Vec::new();
-            if !artist.is_empty() {
-                segs.push(artist);
-            }
-            (segs, name)
-        }
-        Style::Flat => (Vec::new(), name),
-        Style::Keep => (Vec::new(), String::new()),
+    let mut segs = Vec::new();
+    if layout.language {
+        segs.push(if t.language.trim().is_empty() {
+            "Unsortiert".to_string()
+        } else {
+            lang_display(&t.language)
+        });
     }
+    if layout.genre {
+        segs.push(bucket(&t.genre, "Sonstige"));
+    }
+    if layout.artist {
+        segs.push(if needs_work(&t.artist) {
+            "Unbekannt".to_string()
+        } else {
+            sanitize(&t.artist)
+        });
+    }
+    if layout.album {
+        segs.push(if needs_work(&t.album) {
+            "Ohne Album".to_string()
+        } else {
+            sanitize(&t.album)
+        });
+    }
+    (segs, name)
 }
 
 // ---------------------------------------------------------------------------
@@ -241,16 +354,43 @@ pub struct DupGroup {
     pub tracks: Vec<DupTrack>,
 }
 
+/// One track's catalog state (the LLM input for the full metadata pass).
+#[derive(Serialize, Debug)]
+pub struct TrackMeta {
+    pub id: u64,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub genre: String,
+    pub language: String,
+    pub file: String,
+}
+
+/// How complete the catalog is (drives the "which tracks still need the
+/// LLM pass" decision).
+#[derive(Serialize, Debug)]
+pub struct TagStats {
+    pub total: usize,
+    pub missing_language: usize,
+    pub missing_genre: usize,
+    pub mojibake: usize,
+    pub ambiguous: usize,
+}
+
 #[derive(Serialize, Debug)]
 pub struct ReorgPlan {
-    pub style: String,
+    pub layout: String,
     pub collection: String,
     pub kind: String,
     pub moves: Vec<Move>,
     pub duplicates: Vec<DupGroup>,
-    /// Music tracks with missing/messy metadata — the LLM-suggest
-    /// candidates (the `index` field is the array position).
+    /// Music tracks with missing/messy metadata (incl. suspected mojibake)
+    /// — the LLM-suggest candidates (the `index` field is the array
+    /// position).
     pub ambiguous: Vec<Value>,
+    /// Every music track's catalog state (the full metadata pass input).
+    pub tracks: Vec<TrackMeta>,
+    pub tag_stats: TagStats,
     pub move_bytes: u64,
 }
 
@@ -263,7 +403,12 @@ fn ext_of(path: &str) -> String {
 }
 
 /// Build the plan for one collection. `root` = the collection directory.
-pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Style) -> ReorgPlan {
+pub fn plan(
+    lib: &aria_audio::Library,
+    root: &Path,
+    collection: &str,
+    layout: &Layout,
+) -> ReorgPlan {
     let tracks: Vec<&aria_audio::Track> =
         lib.iter().filter(|t| t.collection == collection).collect();
     let kind = match tracks.first().map(|t| t.kind).unwrap_or_default() {
@@ -273,7 +418,8 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
     };
     // Layout moves are music-only (sermon/audiobook structure is kept);
     // dedupe + LLM apply to everything.
-    let move_style = if kind == "music" { style } else { Style::Keep };
+    let keep = Layout::default();
+    let move_layout = if kind == "music" { *layout } else { keep };
 
     // Current relative paths (collision detection): path → track id.
     let mut taken: BTreeMap<String, u64> = tracks
@@ -296,9 +442,15 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
         };
         let rel_s = rel.to_string_lossy().to_string();
         let ext = ext_of(&t.path);
-        let (segs, name) = target_of(move_style, t, &ext);
+        let (segs, name) = target_of(&move_layout, t, &ext);
         let needs_catalog_fix = kind == "music"
-            && (needs_work(&t.artist) || needs_work(&t.album) || needs_work(&t.title));
+            && (needs_work(&t.artist)
+                || needs_work(&t.album)
+                || needs_work(&t.title)
+                || looks_mojibake(&t.artist)
+                || looks_mojibake(&t.album)
+                || looks_mojibake(&t.title)
+                || looks_mojibake(&t.genre));
         if name.is_empty() {
             if needs_catalog_fix {
                 push_ambiguous(&mut ambiguous, t);
@@ -350,20 +502,13 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
             move_bytes += size;
             taken.insert(target_s.clone(), t.id);
             taken.remove(&rel_s);
-            let reason = if segs.is_empty() {
-                "flat layout"
-            } else if segs.len() == 1 {
-                "artist grouping"
-            } else {
-                "artist/album grouping"
-            };
             moves.push(Move {
                 track_id: t.id,
                 title: t.title.clone(),
                 artist: t.artist.clone(),
                 from: rel_s,
                 to: target_s,
-                reason: reason.to_string(),
+                reason: format!("layout: {}", move_layout.as_str()),
             });
         }
         // Independent of the move: a messy CATALOG needs LLM work even when
@@ -403,13 +548,68 @@ pub fn plan(lib: &aria_audio::Library, root: &Path, collection: &str, style: Sty
         })
         .collect();
 
+    // Catalog completeness (music only): which tracks still need the LLM
+    // metadata pass (missing language/genre) and what the full pass sees.
+    let is_music = kind == "music";
+    let missing_language = if is_music {
+        tracks
+            .iter()
+            .filter(|t| t.language.trim().is_empty())
+            .count()
+    } else {
+        0
+    };
+    let missing_genre = if is_music {
+        tracks.iter().filter(|t| t.genre.trim().is_empty()).count()
+    } else {
+        0
+    };
+    let mojibake = if is_music {
+        tracks
+            .iter()
+            .filter(|t| {
+                looks_mojibake(&t.artist)
+                    || looks_mojibake(&t.album)
+                    || looks_mojibake(&t.title)
+                    || looks_mojibake(&t.genre)
+            })
+            .count()
+    } else {
+        0
+    };
+    let track_metas: Vec<TrackMeta> = if is_music {
+        tracks
+            .iter()
+            .map(|t| TrackMeta {
+                id: t.id,
+                title: t.title.clone(),
+                artist: t.artist.clone(),
+                album: t.album.clone(),
+                genre: t.genre.clone(),
+                language: t.language.clone(),
+                file: t.path.rsplit('/').next().unwrap_or("").to_string(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let ambiguous_count = ambiguous.len();
     ReorgPlan {
-        style: move_style.as_str().to_string(),
+        layout: move_layout.as_str(),
         collection: collection.to_string(),
         kind: kind.to_string(),
         moves,
         duplicates,
         ambiguous,
+        tracks: track_metas,
+        tag_stats: TagStats {
+            total: if is_music { tracks.len() } else { 0 },
+            missing_language,
+            missing_genre,
+            mojibake,
+            ambiguous: ambiguous_count,
+        },
         move_bytes,
     }
 }
@@ -550,20 +750,34 @@ pub fn remove_duplicates(
 /// Write the accepted catalog suggestions as real tags (lofty). Only the
 /// provided (non-empty) fields are touched. Returns the tagged count.
 /// One accepted catalog suggestion: `track_id` + the optional new
-/// `title` / `artist` / `album` (empty = leave that field as is).
-pub type TagEdit = (u64, Option<String>, Option<String>, Option<String>);
+/// `title` / `artist` / `album` / `genre` / `language` (empty = leave
+/// that field as is).
+#[derive(Debug, Clone, Default)]
+pub struct TagRow {
+    pub id: u64,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+    pub language: Option<String>,
+}
 
-pub fn apply_tags(lib: &aria_audio::Library, items: &[TagEdit]) -> Result<usize, String> {
+pub fn apply_tags(lib: &aria_audio::Library, items: &[TagRow]) -> Result<usize, String> {
+    let clean = |s: Option<String>| s.filter(|s| !s.trim().is_empty());
     let mut n = 0;
-    for (id, title, artist, album) in items {
-        let Some(t) = lib.get(*id) else {
+    for r in items {
+        let Some(t) = lib.get(r.id) else {
             continue;
         };
         aria_audio::set_tags(
             Path::new(&t.path),
-            title.as_deref().filter(|s| !s.trim().is_empty()),
-            artist.as_deref().filter(|s| !s.trim().is_empty()),
-            album.as_deref().filter(|s| !s.trim().is_empty()),
+            &aria_audio::TagEdit {
+                title: clean(r.title.clone()),
+                artist: clean(r.artist.clone()),
+                album: clean(r.album.clone()),
+                genre: clean(r.genre.clone()),
+                language: clean(r.language.clone()),
+            },
         )
         .map_err(|e| format!("{}: {e}", t.title))?;
         n += 1;
@@ -594,6 +808,10 @@ fn admin_only(u: &crate::web::WebUser) -> Option<Response> {
 
 #[derive(Deserialize)]
 struct PlanQuery {
+    /// The grouping levels ("language-genre-artist-album") — wins over
+    /// `style` (the legacy preset names still work).
+    #[serde(default)]
+    layout: Option<String>,
     #[serde(default)]
     style: Option<String>,
     #[serde(default)]
@@ -610,11 +828,21 @@ async fn handle_plan(
     if crate::web::authorized(&state.cfg, &headers).is_none() {
         return crate::web::denied();
     }
-    let style = q
-        .style
+    let spec = q
+        .layout
         .as_deref()
-        .and_then(parse_style)
-        .unwrap_or(Style::ArtistAlbum);
+        .or(q.style.as_deref())
+        .unwrap_or("artist-album");
+    let layout = match Layout::parse(spec) {
+        Some(l) => l,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"ok": false, "error": format!("unknown layout `{spec}` (e.g. language-genre-artist-album, artist-album, flat, keep)")})),
+            )
+                .into_response();
+        }
+    };
     let items = match state.cfg.collection_items() {
         Ok(i) => i,
         Err(e) => {
@@ -630,7 +858,7 @@ async fn handle_plan(
     let plans: Vec<Value> = items
         .iter()
         .filter(|i| wanted.map(|w| i.name == w).unwrap_or(true))
-        .map(|i| plan(&lib, &i.path, &i.name, style))
+        .map(|i| plan(&lib, &i.path, &i.name, &layout))
         .map(|p| serde_json::to_value(&p).unwrap_or_default())
         .collect();
     drop(lib);
@@ -639,7 +867,9 @@ async fn handle_plan(
 
 #[derive(Deserialize)]
 struct ApplyBody {
-    style: String,
+    /// The layout spec (levels or a legacy preset name).
+    #[serde(alias = "style")]
+    layout: String,
     collection: String,
 }
 
@@ -655,10 +885,10 @@ async fn handle_apply(
     if let Some(r) = admin_only(&u) {
         return r;
     }
-    let Some(style) = parse_style(&body.style) else {
+    let Some(layout) = Layout::parse(&body.layout) else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"ok": false, "error": "unknown style"})),
+            Json(serde_json::json!({"ok": false, "error": format!("unknown layout `{}` (e.g. language-genre-artist-album, artist-album, flat, keep)", body.layout)})),
         )
             .into_response();
     };
@@ -681,7 +911,7 @@ async fn handle_apply(
     };
     let p = {
         let lib = state.library.read().unwrap();
-        plan(&lib, &item.path, &item.name, style)
+        plan(&lib, &item.path, &item.name, &layout)
     };
     if p.moves.is_empty() {
         return Json(serde_json::json!({"ok": true, "moved": 0, "note": "nothing to move"}))
@@ -828,13 +1058,21 @@ async fn handle_apply_tags(
     if let Some(r) = admin_only(&u) {
         return r;
     }
-    let parsed: Vec<TagEdit> = body
+    // Rows: [track_id, title?, artist?, album?, genre?, language?]
+    let parsed: Vec<TagRow> = body
         .items
         .iter()
         .filter_map(|v| {
             let id = v.get(0)?.as_u64()?;
             let s = |i: usize| v.get(i).and_then(|x| x.as_str()).map(str::to_string);
-            Some((id, s(1), s(2), s(3)))
+            Some(TagRow {
+                id,
+                title: s(1),
+                artist: s(2),
+                album: s(3),
+                genre: s(4),
+                language: s(5),
+            })
         })
         .collect();
     let n = {
@@ -871,6 +1109,38 @@ pub fn routes() -> Router<Arc<AppState>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn layout_parses_levels_and_presets() {
+        let l = Layout::parse("language-genre-artist-album").unwrap();
+        assert!(l.language && l.genre && l.artist && l.album && !l.flat);
+        assert_eq!(l.as_str(), "language-genre-artist-album");
+        let l = Layout::parse("artist-album").unwrap();
+        assert!(!l.language && !l.genre && l.artist && l.album);
+        let l = Layout::parse("flat").unwrap();
+        assert!(l.flat);
+        assert_eq!(l.as_str(), "flat");
+        assert_eq!(Layout::parse("keep").unwrap().as_str(), "keep");
+        assert!(Layout::parse("language-artist").unwrap().as_str() == "language-artist");
+        assert!(Layout::parse("bogus").is_none());
+    }
+
+    #[test]
+    fn mojibake_detection() {
+        assert!(looks_mojibake("Faszination Panflцte 2"));
+        assert!(looks_mojibake("FrostÃ¶de"));
+        assert!(looks_mojibake("Weihnachtsâ€“Lied"));
+        assert!(!looks_mojibake("Heidi Klum"));
+        assert!(!looks_mojibake("Griechische Hymne")); // all-Cyrillic/greek titles are fine
+    }
+
+    #[test]
+    fn lang_display_maps_codes() {
+        assert_eq!(lang_display("deu|G"), "Deutsch");
+        assert_eq!(lang_display("eng"), "Englisch");
+        assert_eq!(lang_display("Deutsch"), "Deutsch");
+        assert_eq!(lang_display("yid"), "yid");
+    }
+
     /// Cosmetic differences (case, numbering prefixes, spacing, extension
     /// case) between tag-derived and on-disk names are NOT moves — that is
     /// what made the live plan want to duplicate 1 160 already-placed files.
@@ -904,7 +1174,16 @@ mod tests {
         let lib = aria_audio::Library::scan_collections(&items).unwrap();
         // Give the track the tag-derived name (no "00 - " folder prefix,
         // different case) — simulates the live mismatch.
-        let plan = plan(&lib, &root, "musik", Style::ArtistAlbum);
+        let plan = plan(
+            &lib,
+            &root,
+            "musik",
+            &Layout {
+                artist: true,
+                album: true,
+                ..Default::default()
+            },
+        );
         assert!(
             plan.moves.iter().all(|m| {
                 // A move is legitimate only when the NORMALIZED paths differ.
@@ -933,7 +1212,16 @@ mod tests {
             path: root.clone(),
         }];
         let lib = aria_audio::Library::scan_collections(&items).unwrap();
-        let plan = plan(&lib, &root, "musik", Style::ArtistAlbum);
+        let plan = plan(
+            &lib,
+            &root,
+            "musik",
+            &Layout {
+                artist: true,
+                album: true,
+                ..Default::default()
+            },
+        );
         for m in &plan.moves {
             // A move target has exactly the same depth (or fewer) segments
             // as its source + at most the intended artist/album levels — and
@@ -1005,17 +1293,41 @@ mod tests {
             .fingerprint;
 
         // flat style: the titles already are "NN - x" → no moves needed.
-        let plan_flat = plan(&lib, &root, "musik", Style::Flat);
+        let plan_flat = plan(
+            &lib,
+            &root,
+            "musik",
+            &Layout {
+                flat: true,
+                ..Default::default()
+            },
+        );
         assert!(
             plan_flat.moves.is_empty(),
             "flat layout is already met: {:?}",
             plan_flat.moves
         );
 
-        // artist-album with empty tags: artist/album are empty → the
-        // target is flat anyway → still no moves (nothing to group by).
-        let plan_aa = plan(&lib, &root, "musik", Style::ArtistAlbum);
-        assert!(plan_aa.moves.is_empty());
+        // artist-album with empty tags: the files land in the explicit
+        // "Unbekannt"/"Ohne Album" buckets (instead of being scattered at
+        // the collection root) — until their metadata is fixed.
+        let plan_aa = plan(
+            &lib,
+            &root,
+            "musik",
+            &Layout {
+                artist: true,
+                album: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(plan_aa.moves.len(), 2, "{:?}", plan_aa.moves);
+        assert!(
+            plan_aa
+                .moves
+                .iter()
+                .all(|m| m.to.starts_with("Unbekannt/Ohne Album/"))
+        );
 
         // Now give the tracks tags (simulating the LLM apply-tags step) via
         // a second scan of a tagged tree — instead, verify the MOVE path
@@ -1027,7 +1339,15 @@ mod tests {
         let lib2 = aria_audio::Library::scan_collections_with(&items, &mut reg).unwrap();
         // The PLAN must now want to move random_name.mp3 back to the flat
         // layout.
-        let plan2 = plan(&lib2, &root, "musik", Style::Flat);
+        let plan2 = plan(
+            &lib2,
+            &root,
+            "musik",
+            &Layout {
+                flat: true,
+                ..Default::default()
+            },
+        );
         assert!(
             plan2
                 .moves
@@ -1082,7 +1402,7 @@ mod tests {
             path: root.clone(),
         }];
         let lib = aria_audio::Library::scan_collections(&items).unwrap();
-        let plan = plan(&lib, &root, "musik", Style::Keep);
+        let plan = plan(&lib, &root, "musik", &Layout::default());
         assert_eq!(plan.duplicates.len(), 1, "one duplicate group");
         assert_eq!(plan.duplicates[0].tracks.len(), 2);
 
