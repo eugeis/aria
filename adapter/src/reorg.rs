@@ -253,18 +253,17 @@ fn lang_display(s: &str) -> String {
     sanitize(parts.last().map(String::as_str).unwrap_or(s.trim()))
 }
 
-/// Heuristic for encoding corruption (mojibake): Cyrillic letters inside an
-/// otherwise Latin word ("Panflцte" for "Panflöte"), or the classic
+/// Heuristic for encoding corruption (mojibake): a single WORD mixing
+/// Cyrillic with Latin letters ("Panflцte" for "Panflöte" — a mis-decoded
+/// Latin string scatters foreign letters INSIDE words), or the classic
 /// UTF-8-read-as-Windows double encoding — "Ã"/"Â" followed by a char from
 /// the U+0080..U+00BF block ("FrostÃ¶de"), or "â€" (double-encoded dash).
+///
+/// Deliberately NOT flagged: legitimate bilingual titles, where every word
+/// stays in one script ("Khorolskiy – Избери жизнь – Choose Life"). The
+/// old whole-string rule (any Cyrillic + any Latin) flagged ~50 real
+/// titles in the live library and re-fed them to the LLM on every pass.
 fn looks_mojibake(s: &str) -> bool {
-    let cyr = s
-        .chars()
-        .filter(|c| ('\u{0400}'..='\u{04FF}').contains(c))
-        .count();
-    if cyr >= 1 && s.chars().filter(|c| c.is_ascii_alphabetic()).count() >= 3 {
-        return true;
-    }
     let cs: Vec<char> = s.chars().collect();
     for w in 0..cs.len() {
         if (cs[w] == 'Ã' || cs[w] == 'Â')
@@ -274,6 +273,14 @@ fn looks_mojibake(s: &str) -> bool {
             return true;
         }
         if cs[w] == 'â' && w + 1 < cs.len() && cs[w + 1] == '€' {
+            return true;
+        }
+    }
+    for tok in s.split_whitespace() {
+        let t: Vec<char> = tok.chars().collect();
+        let has_cyr = t.iter().any(|c| ('\u{0400}'..='\u{04FF}').contains(c));
+        let has_lat = t.iter().any(|c| c.is_ascii_alphabetic());
+        if has_cyr && has_lat {
             return true;
         }
     }
@@ -1360,6 +1367,14 @@ mod tests {
         assert!(looks_mojibake("Weihnachtsâ€“Lied"));
         assert!(!looks_mojibake("Heidi Klum"));
         assert!(!looks_mojibake("Griechische Hymne")); // all-Cyrillic/greek titles are fine
+        // Legitimate bilingual titles: every WORD stays in one script —
+        // these must NOT be flagged (the old rule sent ~50 of them to the
+        // LLM on every catalog pass).
+        assert!(!looks_mojibake("Khorolskiy – Избери жизнь"));
+        assert!(!looks_mojibake("Избери жизнь – Choose Life"));
+        assert!(!looks_mojibake("Simon & Marianna Khorolskiy - Небеса ожидают меня"));
+        // ...but the same letters scattered INSIDE a Latin word are damage.
+        assert!(looks_mojibake("Neбesa"));
     }
 
     #[test]
