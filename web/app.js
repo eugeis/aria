@@ -12,9 +12,6 @@ let openPlaylist = null;     // current detail view {id, name, items:[...]}
 let searchMode = "library";
 let searchHits = [];         // current result rows (playable or youtube)
 let queueTimer = null;
-// "artists" = the metadata tree (Künstler → Album), "folders" = the
-// on-disk structure (Sprache → Genre → Künstler → Album) after a reorg.
-let libView = localStorage.getItem("aria-lib-view") || "artists";
 
 // ── player ────────────────────────────────────────────────────────────────
 const player = {
@@ -88,6 +85,21 @@ async function playCurrent() {
     $("player-title").textContent = cur.title;
     $("player-artist").textContent = cur.artist || "";
     $("pp-play").textContent = "❚❚";
+    // Album art for the current track (embedded or enrichment-embedded)
+    const artBox = $("player-art");
+    if (cur.has_art) {
+      const img = new Image();
+      img.onload = () => {
+        artBox.innerHTML = "";
+        artBox.classList.add("has-art");
+        artBox.appendChild(img);
+      };
+      img.onerror = () => { artBox.classList.remove("has-art"); artBox.textContent = "♫"; };
+      img.src = `/art/${cur.id}`;
+    } else {
+      artBox.classList.remove("has-art");
+      artBox.textContent = "♫";
+    }
     let url;
     if (cur.path) {
       // Offline entry: cache-first blob URL (works without a connection).
@@ -456,8 +468,9 @@ function fmtSize(bytes) {
 }
 
 function offlineBadge() {
+  toolsOfflineCount = offlineList.length;
   setBadgeCount($("offline-count"), offlineList.length);
-  setBadgeCount($("more-offline-count"), offlineList.length);
+  updateToolsCount();
 }
 
 function persistOffline() {
@@ -620,6 +633,7 @@ async function boot() {
   renderQueue(await api("/dl/queue").catch(() => ({ items: [] })));
   renderOffline();
   startQueuePolling();
+  refreshEnrichBadge();
 }
 
 $("login-form").addEventListener("submit", async (e) => {
@@ -646,64 +660,63 @@ $("logout").addEventListener("click", async () => {
   location.reload();
 });
 
-// ── tabs (top row on desktop, bottom bar + "Mehr" sheet on phones) ──────
+// ── views (sidebar / bottom nav: Medien · Suche · Playlists · Werkzeuge) ──
+//
+// Few, purpose-based sections (Spotify/Plex style): "Medien" is the whole
+// listening surface (home cards + library drill-down + album), "Werkzeuge"
+// gathers downloads, offline, enrichment, organizer, sounds, YT-login.
 
-function switchTab(name) {
-  document.querySelectorAll(".tabs button, #bottom-nav button[data-tab]").forEach((x) => {
-    x.classList.toggle("active", x.dataset.tab === name);
-  });
-  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.id === `tab-${name}`));
-  closeMore();
+let currentView = "home";
+let currentTool = "queue";
+
+function showView(name) {
+  currentView = name;
+  document.querySelectorAll(".sidebar button[data-view], #bottom-nav button[data-view]").forEach((x) =>
+    x.classList.toggle("active", x.dataset.view === name)
+  );
+  document.querySelectorAll(".view").forEach((x) => x.classList.toggle("active", x.id === `view-${name}`));
+  if (name === "search") {
+    if (!searchHits.length) doSearch();
+  } else if (name === "playlists") {
+    loadRecent();
+  } else if (name === "tools") {
+    showTool(currentTool);
+  } else if (name === "home") {
+    stopDrill();
+  }
+  if (name !== "tools") stopSrcPreview();
+}
+
+function showTool(name) {
+  currentTool = name;
+  document.querySelectorAll("#tool-tabs button").forEach((x) =>
+    x.classList.toggle("active", x.dataset.tool === name)
+  );
+  document.querySelectorAll(".tool").forEach((x) => x.classList.toggle("active", x.id === `tool-${name}`));
   if (name === "queue") refreshQueueNow();
   if (name === "offline") renderOffline();
-  if (name === "playlists") loadRecent();
   if (name === "reorg") loadReorgCollections();
   if (name === "sounds") loadSources();
+  if (name === "enrich") refreshEnrichBadge();
   if (name !== "sounds") stopSrcPreview();
 }
 
-document.querySelectorAll(".tabs button, #bottom-nav button[data-tab]").forEach((b) =>
-  b.addEventListener("click", () => switchTab(b.dataset.tab))
+document.querySelectorAll(".sidebar button[data-view], #bottom-nav button[data-view]").forEach((b) =>
+  b.addEventListener("click", () => showView(b.dataset.view))
+);
+document.querySelectorAll("#tool-tabs button[data-tool]").forEach((b) =>
+  b.addEventListener("click", () => showTool(b.dataset.tool))
 );
 
-function openMore() {
-  $("more-sheet").classList.remove("hidden");
-}
-function closeMore() {
-  $("more-sheet").classList.add("hidden");
-}
-$("bn-more").addEventListener("click", () => $("more-sheet").classList.toggle("hidden"));
-document.querySelectorAll("#more-sheet [data-tab]").forEach((b) =>
-  b.addEventListener("click", () => switchTab(b.dataset.tab))
-);
-document.querySelectorAll("[data-close-more]").forEach((el) => el.addEventListener("click", closeMore));
+// ── browse (home cards, library drill-down, album view) ─────────────────
+//
+// Spotify/Plex style: the "Medien" view opens on a home of card rows
+// (Sprachen, Genres, top Künstler). Clicking a card drills down —
+// language → genre → albums → album detail. The old flat
+// artist/album/details-list is kept as the "Künstler" drill mode.
 
-// ── browse ────────────────────────────────────────────────────────────────
-
-async function loadLibrary() {
-  try {
-    library = await api("/dl/library");
-  } catch (e) {
-    $("browse").innerHTML = `<p class="error">${esc(e.message)}</p>`;
-    return;
-  }
-  renderBrowse();
-}
-
-function trackRowHtml(t, opts = {}) {
-  const no = t.track_no ? `<span class="t-no">${t.track_no}</span>` : `<span class="t-no"></span>`;
-  const dur = `<span class="t-dur">${fmtMs(t.duration_ms)}</span>`;
-  const play = `<button class="act" data-act="play" data-id="${t.id}" title="Abspielen">▶</button>`;
-  const pl = `<button class="act" data-act="pladd" data-id="${t.id}" title="Zur Playlist">＋</button>`;
-  const off = t.rel_path
-    ? `<button class="act" data-act="t-off" data-path="${esc(t.rel_path)}" data-title="${esc(t.title)}" data-artist="${esc(t.artist || "")}" title="Für offline speichern">⤓</button>`
-    : "";
-  return `<div class="t-row" data-track="${t.id}">
-    ${no}<span class="t-title" title="${esc(t.title)}">${esc(t.title)}</span>
-    <span class="t-meta muted">${esc(t.artist || "")}${t.album ? " · " + esc(t.album) : ""}</span>
-    ${dur}<span class="t-actions">${play}${pl}${off}</span>
-  </div>`;
-}
+let drill = { mode: "folders", path: [] };   // path = ["Deutsch", "Geistliches"]
+let albumState = null;                        // {collection, artist, album} | null
 
 function allLibraryTracks() {
   return (
@@ -711,111 +724,323 @@ function allLibraryTracks() {
   );
 }
 
-// Build the folder tree from the tracks' on-disk paths (rel_path):
-// every path segment before the file name is a folder node. rel_path is
-// relative to the media root and starts with the collection dir
-// ("musik/Deutsch/…") — drop it, the collection is already the section.
-function buildFolderTree(tracks, collection) {
-  const root = { children: new Map(), tracks: [] };
-  for (const t of tracks) {
-    let segs = (t.rel_path || "").split("/").filter(Boolean);
-    if (collection && segs.length > 1 && segs[0] === collection) segs = segs.slice(1);
-    let node = root;
-    for (let i = 0; i < segs.length - 1; i++) {
-      const s = segs[i];
-      if (!node.children.has(s)) node.children.set(s, { children: new Map(), tracks: [] });
-      node = node.children.get(s);
-    }
-    node.tracks.push(t);
+async function loadLibrary() {
+  try {
+    library = await api("/dl/library");
+  } catch (e) {
+    $("home-rows").innerHTML = `<p class="error">${esc(e.message)}</p>`;
+    return;
   }
-  return root;
+  const n = allLibraryTracks().length;
+  $("lib-total").textContent = n ? `${n} Titel` : "";
+  updateToolsCount();
+  renderHome();
 }
 
-function folderTrackCount(node) {
-  return node.tracks.length + [...node.children.values()].reduce((n, c) => n + folderTrackCount(c), 0);
+// ── art resolution: /art/<id> (embedded) → /art/cache/<key> (fetched) →
+// generated gradient tile (name-derived, always available offline). ──────
+function tileColor(seed) {
+  let h = 0;
+  for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const hue = h % 360;
+  const hue2 = (hue + 40 + (h % 50)) % 360;
+  return `linear-gradient(135deg, hsl(${hue} 45% 30%), hsl(${hue2} 55% 18%))`;
 }
 
-function folderNodeHtml(node, name, depth) {
-  const kids = [...node.children.entries()]
-    .map(([n, ch]) => folderNodeHtml(ch, n, depth + 1))
-    .join("");
-  const rows = node.tracks.map((t) => trackRowHtml(t)).join("");
-  const ids = [];
-  const collect = (x) => {
-    x.tracks.forEach((t) => ids.push(t.id));
-    x.children.forEach((c) => collect(c));
-  };
-  collect(node);
-  const head =
-    ids.length > 1
-      ? `<div class="album-head"><span></span><span class="t-dur">Zeit</span><span class="t-actions">
-           <button class="act ghost" data-act="playall-ids" data-ids="${ids.join(",")}" title="Ordner abspielen">▶ Ordner</button>
-         </span></div>`
-      : "";
-  return `<details class="folder f${Math.min(depth, 4)}" ${depth === 0 ? "open" : ""}>
-    <summary><b>${esc(name)}</b> <span class="muted">(${folderTrackCount(node)})</span></summary>
-    ${head}${kids}${rows}
-  </details>`;
+function artImgHtml(name, srcs) {
+  // srcs: ordered candidate URLs; the last "src" is the tile sentinel.
+  let chain = srcs
+    .map((u, i) => {
+      const next =
+        i + 1 < srcs.length
+          ? `this.src=${JSON.stringify(srcs[i + 1])}`
+          : `tileify(this, ${JSON.stringify(name)})`;
+      return `onerror="this.onerror=null;${next}"`;
+    })
+    .join(" ");
+  const first = srcs.length ? srcs[0] : "data:,";
+  return `<img class="card-art" loading="lazy" src="${first}" ${chain} alt="">`;
 }
 
-function renderCollectionFolders(c) {
-  const tracks = c.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks));
-  const tree = buildFolderTree(tracks, c.name);
-  if (!tree.children.size && !tree.tracks.length) return `<p class="muted">Keine Ordner-Struktur.</p>`;
-  const kids = [...tree.children.entries()].map(([n, ch]) => folderNodeHtml(ch, n, 0)).join("");
-  // tracks sitting directly in the collection root (no subfolder)
-  const loose = tree.tracks.map((t) => trackRowHtml(t)).join("");
-  return kids + loose;
+function tileify(img, name) {
+  const d = document.createElement("div");
+  d.className = "card-art tile";
+  d.style.background = tileColor(name);
+  d.textContent = (name || "?").trim().charAt(0).toUpperCase();
+  img.replaceWith(d);
 }
 
-function renderBrowse() {
-  const box = $("browse");
+function albumArtSrcs(album, key) {
+  const srcs = [];
+  if (album.art_id) srcs.push(`/art/${album.art_id}`);
+  if (key) srcs.push(`/art/cache/${encodeURIComponent(key)}`);
+  return srcs;
+}
+
+// A card: cover + name + sub + optional hover play.
+function cardHtml(opts) {
+  const { name, sub, art, play, data } = opts;
+  const playBtn = play
+    ? `<button class="card-play" data-play-ids="${play}" title="Abspielen">▶</button>`
+    : "";
+  return `<div class="card" data-card="${data || ""}">
+    <div class="card-cover">${art || `<div class="card-art tile" style="background:${tileColor(name)}">${(name || "?").charAt(0).toUpperCase()}</div>`}${playBtn}</div>
+    <div class="card-name" title="${esc(name)}">${esc(name)}</div>
+    ${sub ? `<div class="card-sub muted">${esc(sub)}</div>` : ""}
+  </div>`;
+}
+
+// ── home ──────────────────────────────────────────────────────────────────
+function stopDrill() {
+  drill = { mode: "folders", path: [] };
+  albumState = null;
+  $("library-drill").classList.add("hidden");
+  $("album-view").classList.add("hidden");
+  $("home-hero").classList.remove("hidden");
+  $("home-rows").classList.remove("hidden");
+}
+
+function renderHome() {
+  const box = $("home-rows");
+  const hero = $("home-hero");
   if (!library.collections?.length) {
+    hero.innerHTML = "";
     box.innerHTML = `<p class="muted">Die Bibliothek ist leer.</p>`;
     return;
   }
-  const toggle = `
-    <div class="view-toggle" role="tablist" aria-label="Bibliothek-Ansicht">
-      <button data-act="libview" data-v="artists" class="${libView === "artists" ? "on" : ""}">Künstler</button>
-      <button data-act="libview" data-v="folders" class="${libView === "folders" ? "on" : ""}">Ordner</button>
-      <span class="muted view-hint">${libView === "folders" ? "die Ordner-Struktur auf der Platte" : "Künstler → Album → Titel"}</span>
-    </div>`;
-  box.innerHTML =
-    toggle +
-    library.collections
-      .map((c) => {
-        const body =
-          libView === "folders"
-            ? renderCollectionFolders(c)
-            : c.artists
-                .map(
-                  (a) => `
-            <details class="artist">
-              <summary><b>${esc(a.name)}</b></summary>
-              ${a.albums
-                .map(
-                  (al) => `
-                <details class="album">
-                  <summary>${esc(al.name)}${al.year ? ` <span class="muted">(${esc(al.year)})</span>` : ""} <span class="muted">(${al.tracks.length})</span></summary>
-                  <div class="album-head"><span></span><span class="t-dur">Zeit</span><span class="t-actions"></span>
-                    <span class="t-actions"><button class="act ghost" data-act="playall-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album abspielen">▶ Album</button>
-                    <button class="act ghost" data-act="pladd-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album zur Playlist">＋ Album</button>
-                    <button class="act ghost" data-act="off-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album für offline speichern">⤓ Album offline</button></span>
-                  </div>
-                  ${al.tracks.map((t) => trackRowHtml(t)).join("")}
-                </details>`
-                )
-                .join("")}
-            </details>`
-                )
-                .join("");
-        return `
-      <details class="col" ${c.name === "musik" ? "open" : ""}>
-        <summary><b>${esc(c.name)}</b> <span class="muted">(${c.kind} · ${c.count})</span></summary>
-        ${body}
-      </details>`;
+  const hour = new Date().getHours();
+  const greet = hour < 5 ? "Gute Nacht" : hour < 11 ? "Guten Morgen" : hour < 18 ? "Guten Tag" : "Guten Abend";
+  hero.innerHTML = `<div class="hero-greet"><h1>${greet}.</h1><p class="muted">Deine Musik, deine Predigten — ${library.total || allLibraryTracks().length} Titel in ${library.collections.length} Sammlungen.</p></div>`;
+
+  const rows = [];
+  const musik = library.collections.find((c) => c.name === "musik");
+  if (musik) {
+    // Sprachen (top-level folders of the reorged tree)
+    const langs = folderLevels(musik, 1);
+    if (langs.length)
+      rows.push(rowHtml("Sprachen", langs.slice(0, 12).map((l) =>
+        cardHtml({
+          name: l.name,
+          sub: `${l.count} Titel`,
+          art: l.art,
+          play: l.ids.join(","),
+          data: `folder:${encodeURIComponent(l.name)}`,
+        })
+      )));
+    // Genres (second level of the folder tree, aggregated across languages)
+    const genres = folderLevels(musik, 2);
+    if (genres.length)
+      rows.push(rowHtml("Genres", genres.slice(0, 18).map((g) =>
+        `<span class="chip" data-chip-genre="${encodeURIComponent(g.name)}">${esc(g.name)} <small>${g.count}</small></span>`
+      ), true));
+    // Top artists
+    const arts = [...musik.artists].sort((a, b) => trackCount(b) - trackCount(a)).slice(0, 24);
+    if (arts.length)
+      rows.push(rowHtml("Künstler", arts.map((a) =>
+        cardHtml({
+          name: a.name,
+          sub: `${trackCount(a)} Titel`,
+          art: a.art_id ? artImgHtml(a.name, [`/art/${a.art_id}`]) : null,
+          play: artistIds(a).join(","),
+          data: `artist:${encodeURIComponent(a.name)}`,
+        })
+      )));
+  }
+  // Playlists shortcut row
+  if (playlistsCache.length)
+    rows.push(rowHtml("Playlists", playlistsCache.slice(0, 12).map((p) =>
+      `<div class="card card-playlist" data-pl-open="${p.id}">
+        <div class="card-cover pl-cover"><span>≡</span></div>
+        <div class="card-name">${esc(p.name)}</div>
+        <div class="card-sub muted">${p.items ? p.items.length : 0} Titel</div>
+      </div>`
+    )));
+  box.innerHTML = rows.join("");
+}
+
+function rowHtml(title, cards, compact) {
+  return `<section class="home-row${compact ? " compact" : ""}">
+    <h2>${esc(title)}</h2>
+    <div class="row-cards">${cards.join("")}</div>
+  </section>`;
+}
+
+function trackCount(artist) {
+  return artist.albums.reduce((n, al) => n + al.tracks.length, 0);
+}
+function artistIds(artist) {
+  return artist.albums.flatMap((al) => al.tracks.map((t) => t.id));
+}
+
+// Aggregate tracks by folder level (rel_path segments, collection prefix
+// dropped): level 1 = Sprache, level 2 = Genre.
+function folderLevels(collection, level) {
+  const tracks = collection.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks));
+  const map = new Map();
+  for (const t of tracks) {
+    let segs = (t.rel_path || "").split("/").filter(Boolean);
+    if (segs.length > 1 && segs[0] === collection.name) segs = segs.slice(1);
+    const key = segs.slice(0, level).join(" / ") || "(root)";
+    let e = map.get(key);
+    if (!e) {
+      e = { name: key.split(" / ").pop(), count: 0, ids: [], art: null };
+      map.set(key, e);
+    }
+    e.count++;
+    e.ids.push(t.id);
+    if (!e.art && t.has_art) e.art = artImgHtml(key, [`/art/${t.id}`]);
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "de"));
+}
+
+// ── drill-down (card grid) ────────────────────────────────────────────────
+function openDrill(mode, path) {
+  drill = { mode, path: path || [] };
+  albumState = null;
+  $("home-hero").classList.add("hidden");
+  $("home-rows").classList.add("hidden");
+  $("album-view").classList.add("hidden");
+  $("library-drill").classList.remove("hidden");
+  renderDrill();
+}
+
+function stopAlbum() {
+  albumState = null;
+  $("album-view").classList.add("hidden");
+  if (drill.path.length || currentView === "home") {
+    $("library-drill").classList.remove("hidden");
+  }
+}
+
+function renderDrill() {
+  const crumb = $("drill-crumb");
+  const grid = $("drill-grid");
+  const musik = library.collections.find((c) => c.name === "musik");
+  const parts = [{ label: "Medien", act: () => stopDrill() }];
+  if (drill.mode === "artists") parts.push({ label: "Künstler", act: () => openDrill("artists", []) });
+  else drill.path.forEach((p, i) =>
+    parts.push({ label: p, act: () => openDrill("folders", drill.path.slice(0, i + 1)) })
+  );
+  crumb.innerHTML = parts
+    .map((p, i) => `<button class="crumb" data-crumb="${i}">${esc(p.label)}</button>`)
+    .join('<span class="crumb-sep">/</span>');
+  crumb.querySelectorAll("[data-crumb]").forEach((b) =>
+    b.addEventListener("click", () => parts[Number(b.dataset.crumb)].act())
+  );
+
+  const cards = drillCards(musik);
+  grid.innerHTML = cards.length
+    ? cards.join("")
+    : `<p class="muted">Nichts hier — zurück zum Start.</p>`;
+}
+
+function drillCards(musik) {
+  if (!musik) return [];
+  const { mode, path } = drill;
+  if (mode === "artists") {
+    const arts = [...musik.artists].sort((a, b) => a.name.localeCompare(b.name, "de"));
+    return arts.map((a) =>
+      cardHtml({
+        name: a.name,
+        sub: `${trackCount(a)} Titel · ${a.albums.length} Alben`,
+        art: a.art_id ? artImgHtml(a.name, [`/art/${a.art_id}`]) : null,
+        play: artistIds(a).join(","),
+        data: `artist:${encodeURIComponent(a.name)}`,
       })
-      .join("");
+    );
+  }
+  // folders mode: walk the rel_path tree to the current depth
+  const tracks = musik.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks));
+  if (path.length >= 3) {
+    // at (or below) album depth: show ALBUMS whose folder path matches
+    const seen = new Map();
+    for (const t of tracks) {
+      let segs = (t.rel_path || "").split("/").filter(Boolean);
+      if (segs.length > 1 && segs[0] === "musik") segs = segs.slice(1);
+      const dir = segs.slice(0, -1).join(" / ");
+      if (dir !== path.join(" / ")) continue;
+      const key = `${t.artist}¦${t.album}`;
+      if (!seen.has(key)) seen.set(key, { artist: t.artist, album: t.album, tracks: [] });
+      seen.get(key).tracks.push(t);
+    }
+    return [...seen.values()].map((al) =>
+      cardHtml({
+        name: al.album || "(ohne Album)",
+        sub: al.artist,
+        art: al.tracks.find((t) => t.has_art) ? artImgHtml(al.album, [`/art/${al.tracks.find((t) => t.has_art).id}`]) : null,
+        play: al.tracks.map((t) => t.id).join(","),
+        data: `album:${encodeURIComponent(al.artist)}¦${encodeURIComponent(al.album)}`,
+      })
+    );
+  }
+  // otherwise: the folders at the next level
+  const levels = folderLevelsAt(musik, path);
+  return levels.map((l) =>
+    cardHtml({
+      name: l.name,
+      sub: `${l.count} Titel`,
+      art: l.art,
+      play: l.ids.join(","),
+      data: `folder:${encodeURIComponent(l.full)}`,
+    })
+  );
+}
+
+function folderLevelsAt(musik, prefix) {
+  const tracks = musik.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks));
+  const map = new Map();
+  for (const t of tracks) {
+    let segs = (t.rel_path || "").split("/").filter(Boolean);
+    if (segs.length > 1 && segs[0] === "musik") segs = segs.slice(1);
+    if (prefix.length && segs.slice(0, prefix.length).join("\x00") !== prefix.join("\x00")) continue;
+    const next = segs[prefix.length];
+    if (!next) continue;
+    const full = segs.slice(0, prefix.length + 1).join(" / ");
+    let e = map.get(full);
+    if (!e) {
+      e = { name: next, full, count: 0, ids: [], art: null };
+      map.set(full, e);
+    }
+    e.count++;
+    e.ids.push(t.id);
+    if (!e.art && t.has_art) e.art = artImgHtml(full, [`/art/${t.id}`]);
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "de"));
+}
+
+// ── album detail ──────────────────────────────────────────────────────────
+function openAlbum(artist, album) {
+  const musik = library.collections.find((c) => c.name === "musik");
+  const a = musik?.artists.find((x) => x.name === artist);
+  const al = a?.albums.find((x) => x.name === album);
+  if (!al) return;
+  albumState = { artist, album };
+  $("home-hero").classList.add("hidden");
+  $("home-rows").classList.add("hidden");
+  $("library-drill").classList.add("hidden");
+  $("album-view").classList.remove("hidden");
+  const ids = al.tracks.map((t) => t.id).join(",");
+  const art = al.art_id ? artImgHtml(album, [`/art/${al.art_id}`, `/art/cache/${encodeURIComponent("musik|"+artist+"|"+album)}`]) : null;
+  $("album-hero").innerHTML = `
+    <div class="al-cover">${art || `<div class="card-art tile" style="background:${tileColor(album)}">${album.charAt(0).toUpperCase()}</div>`}</div>
+    <div class="al-meta">
+      <div class="al-kind muted">Album</div>
+      <h1>${esc(album)}</h1>
+      <div class="al-artist">${esc(artist)}${al.year ? ` <span class="muted">· ${esc(al.year)}</span>` : ""}</div>
+      <div class="al-count muted">${al.tracks.length} Titel</div>
+      <div class="row al-actions">
+        <button class="big" data-act="playall-album" data-artist="${esc(artist)}" data-album="${esc(album)}">▶ Album abspielen</button>
+        <button class="ghost" data-act="pladd-album" data-artist="${esc(artist)}" data-album="${esc(album)}">＋ Zur Playlist</button>
+      </div>
+    </div>`;
+  $("album-tracks").innerHTML = al.tracks.map((t) => trackRowHtml(t)).join("");
+  const back = () => openDrill("artists", []);
+  const b = document.createElement("button");
+  b.className = "ghost al-back";
+  b.textContent = "←";
+  b.title = "Zurück";
+  b.addEventListener("click", back);
+  $("album-hero").prepend(b);
 }
 
 function playIds(ids) {
@@ -824,17 +1049,88 @@ function playIds(ids) {
   if (list.length) playContext(list, 0);
 }
 
+// Card grid click handling (delegated): play buttons + card navigation.
+$("home-rows").addEventListener("click", (e) => handleCardClick(e));
+$("drill-grid").addEventListener("click", (e) => handleCardClick(e));
+
+function handleCardClick(e) {
+  const chip = e.target.closest("[data-chip-genre]");
+  if (chip) {
+    const name = decodeURIComponent(chip.dataset.chipGenre);
+    const musik = library.collections.find((c) => c.name === "musik");
+    const ids = (musik ? folderLevels(musik, 2) : []).filter((g) => g.name === name)[0]?.ids || [];
+    if (ids.length) playIds(ids);
+    return;
+  }
+  const playBtn = e.target.closest("[data-play-ids]");
+  if (playBtn) {
+    e.stopPropagation();
+    playIds(playBtn.dataset.playIds.split(",").filter(Boolean));
+    return;
+  }
+  const plOpen = e.target.closest("[data-pl-open]");
+  if (plOpen) {
+    openPlaylistView(Number(plOpen.dataset.plOpen));
+    showView("playlists");
+    return;
+  }
+  const card = e.target.closest(".card[data-card]");
+  if (!card || !card.dataset.card) return;
+  const ci = card.dataset.card.indexOf(":");
+  const kind = card.dataset.card.slice(0, ci);
+  const raw = card.dataset.card.slice(ci + 1);
+  const val = decodeURIComponent(raw || "");
+  if (kind === "folder") {
+    // folder card: drill one level deeper into this path
+    const path = val.split(" / ");
+    if (path.length >= 3) {
+      // clicking a deep folder re-renders albums for it
+      openDrill("folders", path);
+    } else {
+      openDrill("folders", path);
+    }
+  } else if (kind === "artist") {
+    // artist card → that artist's albums
+    openArtistAlbums(val);
+  } else if (kind === "album") {
+    const [artist, album] = val.split("¦");
+    openAlbum(artist, album);
+  }
+}
+
+function openArtistAlbums(artist) {
+  const musik = library.collections.find((c) => c.name === "musik");
+  const a = musik?.artists.find((x) => x.name === artist);
+  if (!a) return;
+  $("home-hero").classList.add("hidden");
+  $("home-rows").classList.add("hidden");
+  $("album-view").classList.add("hidden");
+  $("library-drill").classList.remove("hidden");
+  $("drill-crumb").innerHTML = `<button class="crumb" data-act-crumb="artists">Medien</button><span class="crumb-sep">/</span><button class="crumb" data-act-crumb="artists">Künstler</button><span class="crumb-sep">/</span><b>${esc(artist)}</b>`;
+  $("drill-crumb").querySelectorAll("[data-act-crumb]").forEach((b) =>
+    b.addEventListener("click", () => openDrill("artists", []))
+  );
+  $("drill-grid").innerHTML = a.albums
+    .map((al) =>
+      cardHtml({
+        name: al.name || "(ohne Album)",
+        sub: al.year || `${al.tracks.length} Titel`,
+        art: al.art_id ? artImgHtml(al.name, [`/art/${al.art_id}`]) : null,
+        play: al.tracks.map((t) => t.id).join(","),
+        data: `album:${encodeURIComponent(a.name)}¦${encodeURIComponent(al.name)}`,
+      })
+    )
+    .join("");
+}
+
+// ── browse actions (restored global dispatcher + album/playlist helpers) ──
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-act]");
   if (!b) return;
   const act = b.dataset.act;
   if (act === "play") playTrackId(Number(b.dataset.id));
   else if (act === "pladd") addTrackToPlaylist(Number(b.dataset.id));
-  else if (act === "libview") {
-    libView = b.dataset.v;
-    localStorage.setItem("aria-lib-view", libView);
-    renderBrowse();
-  } else if (act === "playall-ids") playIds(b.dataset.ids.split(",").filter(Boolean));
+  else if (act === "playall-ids") playIds(b.dataset.ids.split(",").filter(Boolean));
   else if (act === "playall-album") playAlbum(b.dataset.artist, b.dataset.album);
   else if (act === "pladd-album") addAlbumToPlaylist(b.dataset.artist, b.dataset.album);
   else if (act === "t-off")
@@ -967,8 +1263,11 @@ async function doSearch() {
   }
 }
 
-$("search-go").addEventListener("click", doSearch);
 $("search-q").addEventListener("keydown", (e) => e.key === "Enter" && doSearch());
+$("search-q").addEventListener("focus", () => showView("search"));
+$("search-mode").addEventListener("click", (e) => {
+  if (e.target.closest("button[data-mode]")) showView("search");
+});
 
 async function loadCollections() {
   const q = await api("/dl/queue").catch(() => ({ collections: [] }));
@@ -1008,8 +1307,17 @@ $("yt-add").addEventListener("click", () => {
 // ── playlists ─────────────────────────────────────────────────────────────
 
 function setBadgeCount(el, n) {
+  if (!el) return;
   el.textContent = String(n);
   el.classList.toggle("hidden", n === 0);
+}
+
+let toolsQueueCount = 0;
+let toolsOfflineCount = 0;
+function updateToolsCount() {
+  const n = toolsQueueCount + toolsOfflineCount;
+  setBadgeCount($("tools-count"), n);
+  setBadgeCount($("bn-tools-count"), n);
 }
 
 async function loadPlaylists(openId = null) {
@@ -1236,8 +1544,9 @@ function renderQueue(items) {
   const pending = items.filter((i) => i.status.status === "queued").length;
   $("queue-state").textContent = running ? `1 läuft, ${pending} warten` : pending ? `${pending} in der Warteschlange` : items.length ? "Warteschlange leer" : "";
   const count = running + pending;
+  toolsQueueCount = count;
   setBadgeCount($("queue-count"), count);
-  setBadgeCount($("bn-queue-count"), count);
+  updateToolsCount();
   if (!items.length) {
     table.classList.add("hidden");
     empty.classList.remove("hidden");
@@ -1479,4 +1788,141 @@ $("src-results").addEventListener("click", (e) => {
   if (p) return toggleSrcPreview(Number(p.dataset.srcPrev));
   const d = e.target.closest("button[data-src-dl]");
   if (d) return srcDownload(Number(d.dataset.srcDl));
+});
+
+// ── enrichment (Katalog: MusicBrainz + Cover Art Archive) ────────────────
+// Fill missing album covers/years from the internet. Flow: plan (which
+// albums lack art) → per-album lookup (MusicBrainz match + CAA image,
+// cached server-side) → user selects → apply (embed into the files).
+let enrichAlbums = [];   // [{key, artist, album, year, tracks, has_art, state, entry, selected}]
+let enrichRunning = false;
+let enrichStop = false;
+
+async function refreshEnrichBadge() {
+  try {
+    const r = await api("/dl/enrich/plan?collection=musik");
+    enrichAlbums = (r.albums || []).map((a) => ({ ...a, state: "idle", entry: null, selected: false }));
+    const missing = enrichAlbums.filter((a) => !a.has_art).length;
+    const el = $("enrich-count");
+    if (el) {
+      el.textContent = String(missing);
+      el.classList.toggle("hidden", missing === 0);
+    }
+    if (currentTool === "enrich") renderEnrichList();
+  } catch {
+    /* badge stays empty */
+  }
+}
+
+function renderEnrichList() {
+  const list = $("enrich-list");
+  if (!list) return;
+  if (!enrichAlbums.length) {
+    list.innerHTML = `<p class="muted">Noch keine Daten — „Alben analysieren“.</p>`;
+    return;
+  }
+  list.innerHTML = enrichAlbums
+    .map((a, i) => enrichRowHtml(a, i))
+    .join("");
+}
+
+function enrichRowHtml(a, i) {
+  const done = a.state === "done";
+  const hasArt = done && a.entry && a.entry.art_b64;
+  const art = hasArt
+    ? `<img class="en-art" src="data:${a.entry.art_mime || "image/jpeg"};base64,${a.entry.art_b64}" alt="">`
+    : `<div class="en-art none" style="background:${tileColor(a.album)}">${esc((a.album || "?").charAt(0).toUpperCase())}</div>`;
+  let match;
+  if (a.state === "busy") match = `<span class="muted">suche …</span>`;
+  else if (done && a.entry && a.entry.found)
+    match = `<span class="muted">MusicBrainz: ${esc(a.entry.release_title || a.album)}${a.entry.year ? " · " + esc(a.entry.year) : ""} <small>(${Number(a.entry.score || 0).toFixed(2)})</small></span>`;
+  else if (done) match = `<span class="muted">${esc((a.entry && a.entry.note) || "kein Treffer")}</span>`;
+  else match = `<span class="muted">noch nicht gesucht</span>`;
+  return `<div class="en-row">
+    ${art}
+    <div class="en-info">
+      <b>${esc(a.album)}</b> <span class="muted">— ${esc(a.artist)} · ${a.tracks} Titel</span>
+      <div>${match}</div>
+    </div>
+    <div class="en-actions">
+      <label class="chk en-sel"><input type="checkbox" data-en-sel="${i}" ${a.selected ? "checked" : ""} ${hasArt ? "" : "disabled"}> einbetten</label>
+      <button class="ghost" data-en-lookup="${i}" ${enrichRunning ? "disabled" : ""} title="Erneut suchen">${done ? "↻" : "🔍"}</button>
+    </div>
+  </div>`;
+}
+
+async function doEnrichLookup(i) {
+  const a = enrichAlbums[i];
+  if (!a) return;
+  a.state = "busy";
+  renderEnrichList();
+  try {
+    const r = await api("/dl/enrich/lookup", {
+      method: "POST",
+      body: JSON.stringify({ collection: "musik", artist: a.artist, album: a.album, key: a.key }),
+    });
+    a.entry = r.entry;
+    a.state = "done";
+  } catch (e) {
+    a.entry = { found: false, note: e.message };
+    a.state = "done";
+  }
+  renderEnrichList();
+}
+
+$("enrich-scan").addEventListener("click", async () => {
+  if (enrichRunning) return;
+  enrichRunning = true;
+  enrichStop = false;
+  $("enrich-scan").disabled = true;
+  $("enrich-stop").classList.remove("hidden");
+  const todo = enrichAlbums.filter((a) => !a.has_art && a.state !== "done");
+  $("enrich-progress").textContent = todo.length
+    ? `Suche ${todo.length} Alben (≈1 Sekunde pro Album, MusicBrainz-Rate) …`
+    : "Keine Alben ohne Cover mehr zu suchen.";
+  for (let i = 0; i < todo.length; i++) {
+    if (enrichStop) break;
+    $("enrich-progress").textContent = `Suche ${i + 1}/${todo.length}: ${todo[i].album}`;
+    await doEnrichLookup(enrichAlbums.indexOf(todo[i]));
+    await new Promise((r) => setTimeout(r, 1200)); // server paces anyway; keep UI calm
+  }
+  $("enrich-progress").textContent = enrichStop ? "Gestoppt." : "Fertig — Auswahl unten übernehmen.";
+  enrichRunning = false;
+  $("enrich-scan").disabled = false;
+  $("enrich-stop").classList.add("hidden");
+});
+
+$("enrich-stop").addEventListener("click", () => { enrichStop = true; });
+
+$("enrich-apply").addEventListener("click", async () => {
+  const keys = enrichAlbums.filter((a) => a.selected && a.entry && a.entry.art_b64).map((a) => a.key);
+  if (!keys.length) return toast("Kein Cover ausgewählt", true);
+  if (!confirm(`Cover in ${keys.length} Album(e) in die Dateien einbetten (Jahr wird mitgeschrieben)?`)) return;
+  const btn = $("enrich-apply");
+  btn.disabled = true;
+  try {
+    const r = await api("/dl/enrich/apply", { method: "POST", body: JSON.stringify({ keys, update_year: true }) });
+    toast(`Eingebettet: ${r.files} Datei(en) in ${r.applied} Album(en)` + (r.errors && r.errors.length ? ` — ${r.errors.length} Fehler` : ""));
+    enrichAlbums.forEach((a) => { if (keys.includes(a.key)) { a.has_art = true; a.selected = false; } });
+    btn.classList.add("hidden");
+    refreshEnrichBadge();
+    loadLibrary();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("enrich-list").addEventListener("click", (e) => {
+  const l = e.target.closest("[data-en-lookup]");
+  if (l && !enrichRunning) return doEnrichLookup(Number(l.dataset.enLookup));
+});
+
+$("enrich-list").addEventListener("change", (e) => {
+  const c = e.target.closest("[data-en-sel]");
+  if (!c) return;
+  enrichAlbums[Number(c.dataset.enSel)].selected = c.checked;
+  const n = enrichAlbums.filter((a) => a.selected && a.entry && a.entry.art_b64).length;
+  $("enrich-apply").classList.toggle("hidden", n === 0);
 });

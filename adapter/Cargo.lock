@@ -39,6 +39,7 @@ dependencies = [
  "aria-alexa",
  "aria-audio",
  "axum",
+ "base64",
  "bytes",
  "crc32fast",
  "flate2",

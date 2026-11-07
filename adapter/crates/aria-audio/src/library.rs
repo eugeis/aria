@@ -100,6 +100,12 @@ pub struct Track {
     /// The collection kind (music / audiobook / sermon).
     #[serde(default)]
     pub kind: CollectionKind,
+    /// Embedded album art (an empty option = the UI renders a generated
+    /// tile). Shared across the tracks of one album via `Arc` — the
+    /// scanner dedupes by (collection, artist, album) after the build, so
+    /// a 200 KB JPEG costs memory once per album, not once per track.
+    #[serde(skip)]
+    pub cover: Option<std::sync::Arc<Cover>>,
     /// Audiobook: the book (top-level subfolder) this chapter belongs to.
     #[serde(default)]
     pub book: String,
@@ -170,6 +176,9 @@ pub struct TagEdit {
     pub album: Option<String>,
     pub genre: Option<String>,
     pub language: Option<String>,
+    /// A 4-digit year (the enrichment feature writes the MusicBrainz
+    /// release year back into the tag).
+    pub year: Option<String>,
     /// Free text (license/attribution for downloaded free sounds, …).
     pub comment: Option<String>,
 }
@@ -198,23 +207,21 @@ fn strip_id3v1_trailer(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write the given values into the file's primary tag (creating one when
-/// missing — the format's native tag type). Only the provided (non-None)
-/// fields are touched. Used by the reorg feature's "apply the LLM
-/// suggestions" step. Language is format-specific (TLAN / LANGUAGE /
-/// ©lang) and goes in as a raw item.
+/// The shared safety pattern for every in-place tag write (set_tags,
+/// set_cover): refuse 0-byte files, keep the original bytes in memory,
+/// open read+write, run `f` on the primary tag (creating it when absent),
+/// strip legacy ID3v1, save, verify (still parseable, size sane) and
+/// restore the backup when verification fails.
 ///
-/// In-place via `BoundTaggedFile` (lofty's documented pattern — the tag is
+/// In-place via `BoundTaggedFile` — lofty's documented pattern: the tag is
 /// rewritten around the untouched audio; a write-only fd would break
-/// lofty's internal seeks). The original bytes are kept in memory and
-/// restored when the result fails verification (parseable, size sane).
-pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
+/// lofty's internal seeks.
+fn write_tag_safely(path: &Path, f: impl FnOnce(&mut lofty::tag::Tag)) -> Result<(), String> {
     use lofty::file::{BoundTaggedFile, TaggedFileExt};
-    use lofty::tag::Accessor;
     // A 0-byte file is a broken download — refuse with a clear diagnostic
     // instead of a cryptic parser error (and never touch it).
     if fs::metadata(path).map(|m| m.len()).unwrap_or(0) == 0 {
-        return Err("file is empty (0 bytes) — refusing to tag a broken file".to_string());
+        return Err("file is empty (0 bytes) — refusing to modify a broken file".to_string());
     }
     let backup = fs::read(path).map_err(|e| e.to_string())?;
     let restore = |path: &Path, backup: &[u8]| -> Result<(), String> {
@@ -238,32 +245,7 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
                     .ok_or("could not create a tag for this format")?
             }
         };
-        if let Some(v) = &edit.title {
-            tag.set_title(v.clone());
-        }
-        if let Some(v) = &edit.artist {
-            tag.set_artist(v.clone());
-        }
-        if let Some(v) = &edit.album {
-            tag.set_album(v.clone());
-        }
-        if let Some(v) = &edit.genre {
-            tag.set_genre(v.clone());
-        }
-        if let Some(v) = &edit.language {
-            // lofty's common Accessor has no language SETTER, so language
-            // rides a raw TLAN item — remove any existing one first, or
-            // every re-tag appends another frame (the scan then logs
-            // "Replaced frame with ID TLAN" for each duplicate).
-            tag.remove_key(&lofty::tag::ItemKey::Language);
-            tag.push(lofty::tag::TagItem::new(
-                lofty::tag::ItemKey::Language,
-                lofty::tag::ItemValue::Text(v.clone()),
-            ));
-        }
-        if let Some(v) = &edit.comment {
-            tag.set_comment(v.clone());
-        }
+        f(tag);
     }
     // Legacy ID3v1 trailer: drop it before writing. lofty's v1 writer
     // panics on non-ASCII values at the fixed 30-byte field boundary (a
@@ -297,6 +279,81 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
         return Err("tag write verification failed (size/parse) — original restored".to_string());
     }
     Ok(())
+}
+
+/// Write the given values into the file's primary tag (creating one when
+/// missing — the format's native tag type). Only the provided (non-None)
+/// fields are touched. Used by the reorg feature's "apply the LLM
+/// suggestions" step. Language is format-specific (TLAN / LANGUAGE /
+/// ©lang) and goes in as a raw item.
+pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
+    use lofty::tag::Accessor;
+    write_tag_safely(path, |tag| {
+        if let Some(v) = &edit.title {
+            tag.set_title(v.clone());
+        }
+        if let Some(v) = &edit.artist {
+            tag.set_artist(v.clone());
+        }
+        if let Some(v) = &edit.album {
+            tag.set_album(v.clone());
+        }
+        if let Some(v) = &edit.genre {
+            tag.set_genre(v.clone());
+        }
+        if let Some(v) = &edit.year {
+            if let Ok(y) = v.trim().chars().take(4).collect::<String>().parse::<u32>() {
+                if (1900..=2100).contains(&y) {
+                    tag.set_year(y);
+                }
+            }
+        }
+        if let Some(v) = &edit.language {
+            // lofty's common Accessor has no language SETTER, so language
+            // rides a raw TLAN item — remove any existing one first, or
+            // every re-tag appends another frame (the scan then logs
+            // "Replaced frame with ID TLAN" for each duplicate).
+            tag.remove_key(&lofty::tag::ItemKey::Language);
+            tag.push(lofty::tag::TagItem::new(
+                lofty::tag::ItemKey::Language,
+                lofty::tag::ItemValue::Text(v.clone()),
+            ));
+        }
+        if let Some(v) = &edit.comment {
+            tag.set_comment(v.clone());
+        }
+    })
+}
+
+/// Embed (or replace) the album's front cover in the file's primary tag.
+/// Used by the enrichment feature to bake downloaded Cover Art Archive
+/// images into the tracks, where every player (and the /art/<id> route)
+/// can then find them.
+pub fn set_cover(path: &Path, data: &[u8], mime: &str) -> Result<(), String> {
+    use lofty::picture::{MimeType, Picture, PictureType};
+    // from_str is infallible (unknown types land in MimeType::Unknown), so
+    // the Cover Art Archive's image/jpeg + image/png map straight through.
+    let mime_enum = MimeType::from_str(mime);
+    write_tag_safely(path, |tag| {
+        // Replace any existing front cover (keep other pictures — lyrics
+        // sheets etc. — untouched).
+        let drop: Vec<usize> = tag
+            .pictures()
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.pic_type() == PictureType::CoverFront)
+            .map(|(i, _)| i)
+            .collect();
+        for i in drop.into_iter().rev() {
+            let _ = tag.remove_picture(i);
+        }
+        tag.push_picture(Picture::new_unchecked(
+            PictureType::CoverFront,
+            Some(mime_enum),
+            None,
+            data.to_vec(),
+        ));
+    })
 }
 
 /// How many language items (TLAN / LANGUAGE / ©lang) the primary tag
@@ -414,6 +471,7 @@ impl Track {
 }
 
 /// Embedded cover art.
+#[derive(Debug, Clone)]
 pub struct Cover {
     pub data: Vec<u8>,
     pub mime: String,
@@ -538,6 +596,7 @@ impl Library {
                                 year: String::new(),
                                 fingerprint: fingerprint_file(&path),
                                 fp_salt: 0,
+                                cover: meta.cover.map(std::sync::Arc::new),
                             });
                         }
                     }
@@ -600,6 +659,24 @@ impl Library {
                 ))
         });
         registry.assign(&mut tracks);
+        // Dedupe cover art per album: every file of an album carries the
+        // same APIC bytes — share one Arc, and hand the album's art to the
+        // sibling tracks that don't embed it themselves.
+        let mut cover_by_album: std::collections::HashMap<
+            (String, String, String),
+            std::sync::Arc<Cover>,
+        > = std::collections::HashMap::new();
+        for t in tracks.iter_mut() {
+            let key = (t.collection.clone(), t.artist.clone(), t.album.clone());
+            if t.cover.is_some() {
+                cover_by_album
+                    .entry(key.clone())
+                    .or_insert_with(|| t.cover.take().unwrap());
+            }
+            if let Some(shared) = cover_by_album.get(&key) {
+                t.cover = Some(std::sync::Arc::clone(shared));
+            }
+        }
         let playable = tracks.iter().filter(|t| t.playable).count();
         tracing::info!(total = tracks.len(), playable, "collections scanned");
         Ok(Self { tracks })
@@ -621,10 +698,14 @@ impl Library {
         Self::scan_collections(&items)
     }
 
-    /// Cover art for a track, if embedded.
+    /// Cover art for a track: the in-memory copy (read once per album at
+    /// scan time) first, a disk read as fallback.
     pub fn cover(&self, id: u64) -> Option<Cover> {
-        let path = self.get(id)?.path.clone();
-        read_cover(&PathBuf::from(path))
+        let t = self.get(id)?;
+        if let Some(c) = &t.cover {
+            return Some((**c).clone());
+        }
+        read_cover(&PathBuf::from(&t.path))
     }
 
     /// Distinct audiobook book names (the immediate subfolders of the
@@ -740,6 +821,7 @@ struct Meta {
     duration_ms: u64,
     bitrate_kbps: u32,
     year: String,
+    cover: Option<Cover>,
 }
 
 fn read_meta(path: &Path) -> Meta {
@@ -753,6 +835,7 @@ fn read_meta(path: &Path) -> Meta {
         duration_ms: 0,
         bitrate_kbps: 0,
         year: String::new(),
+        cover: None,
     };
     let Ok(tagged) = lofty::read_from_path(path) else {
         return meta;
@@ -791,6 +874,18 @@ fn read_meta(path: &Path) -> Meta {
             if (1900..=2100).contains(&y) {
                 meta.year = date.chars().take(4).collect();
             }
+        }
+        // Embedded cover art: read it here, from the tag we already opened
+        // (a separate read_cover pass would re-open every file on scan).
+        if let Some(pic) = tag.pictures().first() {
+            let mime = pic
+                .mime_type()
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_else(|| "image/jpeg".to_string());
+            meta.cover = Some(Cover {
+                data: pic.data().to_vec(),
+                mime,
+            });
         }
     }
     meta
@@ -858,6 +953,7 @@ fn build_track(
         year: meta.year,
         fingerprint: fingerprint_file(path),
         fp_salt: 0,
+        cover: meta.cover.map(std::sync::Arc::new),
     })
 }
 

@@ -41,6 +41,11 @@ struct TrackView {
     /// Media-root-relative path (the offline catalog's key — the SPA
     /// saves for offline by this path).
     rel_path: String,
+    /// True when the track (or its album, via the scan's per-album cover
+    /// dedupe) carries embedded art — the SPA then requests /art/<id> for
+    /// the card/hero image.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    has_art: bool,
 }
 
 fn kind_str(k: CollectionKind) -> &'static str {
@@ -66,6 +71,7 @@ fn track_view(t: &aria_audio::Track) -> TrackView {
             .strip_prefix("/media/")
             .map(str::to_string)
             .unwrap_or_else(|| t.path.rsplit('/').next().unwrap_or("").to_string()),
+        has_art: t.cover.is_some(),
     }
 }
 
@@ -99,12 +105,19 @@ struct AlbumView {
     name: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     year: String,
+    /// A track id with embedded art (the SPA renders /art/<id> as the
+    /// album card image); None = no art (generated tile).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    art_id: Option<u64>,
     tracks: Vec<TrackView>,
 }
 
 #[derive(Serialize)]
 struct ArtistView {
     name: String,
+    /// The first available album art across the artist's albums.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    art_id: Option<u64>,
     albums: Vec<AlbumView>,
 }
 
@@ -180,14 +193,21 @@ async fn handle_library(State(state): State<Arc<AppState>>, headers: HeaderMap) 
                     .unwrap_or_default();
                 let mut list = sort_tracks(al_tracks.iter().copied());
                 list.sort_by(|a, b| a.track_no.cmp(&b.track_no).then(a.title.cmp(&b.title)));
+                let art_id = al_tracks
+                    .iter()
+                    .find(|t| t.cover.is_some())
+                    .map(|t| t.id);
                 albums.push(AlbumView {
                     name: al_name.clone(),
                     year,
+                    art_id,
                     tracks: list,
                 });
             }
+            let art_id = albums.iter().find_map(|al| al.art_id);
             artists.push(ArtistView {
                 name: a_name.clone(),
+                art_id,
                 albums,
             });
         }

@@ -19,6 +19,8 @@ pub struct AppState {
     pub players: Mutex<HashMap<String, PlayerState>>,
     pub registry: PlaybackRegistry,
     pub agent: Arc<dyn AgentBackend>,
+    /// Catalog enrichment (MusicBrainz + Cover Art Archive) — see enrich.rs.
+    pub enrich: Arc<crate::enrich::EnrichState>,
     /// The web-app download queue (persisted at {data_dir}/dl-queue.json).
     pub dl_queue: Arc<crate::web::DlQueue>,
     /// The web-app playlists (persisted at {data_dir}/playlists.json).
@@ -30,6 +32,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(cfg: Config, library: Library, agent: Arc<dyn AgentBackend>) -> Self {
+        let enrich = Arc::new(crate::enrich::EnrichState::new(&cfg.data_dir()));
         let players = load_state(&cfg.state_path()).players;
         let dl_queue = crate::web::DlQueue::load(&cfg);
         let playlists = crate::music::PlaylistStore::load(&cfg);
@@ -40,6 +43,7 @@ impl AppState {
             players: Mutex::new(players),
             registry: PlaybackRegistry::new(),
             agent,
+            enrich,
             dl_queue,
             playlists,
             recent,

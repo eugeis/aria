@@ -20,6 +20,7 @@ use tracing_subscriber::EnvFilter;
 
 mod agent;
 mod config;
+mod enrich;
 mod music;
 mod reorg;
 mod router;
@@ -244,6 +245,7 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
         .merge(music::routes())
         .merge(reorg::routes())
         .merge(sources::routes())
+        .merge(enrich::routes())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);
 

@@ -472,6 +472,7 @@ async fn handle_download(
         album: Some("Freie Sounds".to_string()),
         genre: None,
         language: None,
+        year: None,
         comment: Some(comment),
     };
     if let Err(e) = aria_audio::set_tags(&path, &edit) {
