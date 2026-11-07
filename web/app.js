@@ -949,16 +949,16 @@ function drillCards(musik) {
       })
     );
   }
-  // folders mode: walk the rel_path tree to the current depth
+  // folders mode: walk the rel_path tree to the current depth.
+  // Layout: L1 Sprache → L2 Genre → L3 Künstler → L4 Album → files.
   const tracks = musik.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks));
   if (path.length >= 3) {
-    // at (or below) album depth: show ALBUMS whose folder path matches
+    // at artist depth: show the ALBUMS living in this artist folder
     const seen = new Map();
     for (const t of tracks) {
       let segs = (t.rel_path || "").split("/").filter(Boolean);
       if (segs.length > 1 && segs[0] === "musik") segs = segs.slice(1);
-      const dir = segs.slice(0, -1).join(" / ");
-      if (dir !== path.join(" / ")) continue;
+      if (segs.slice(0, 3).join("") !== path.join("")) continue;
       const key = `${t.artist}¦${t.album}`;
       if (!seen.has(key)) seen.set(key, { artist: t.artist, album: t.album, tracks: [] });
       seen.get(key).tracks.push(t);
@@ -967,7 +967,9 @@ function drillCards(musik) {
       cardHtml({
         name: al.album || "(ohne Album)",
         sub: al.artist,
-        art: al.tracks.find((t) => t.has_art) ? artImgHtml(al.album, [`/art/${al.tracks.find((t) => t.has_art).id}`]) : null,
+        art: (al.tracks.find((t) => t.has_art) || {}) .has_art
+          ? artImgHtml(al.album, [`/art/${al.tracks.find((t) => t.has_art).id}`])
+          : null,
         play: al.tracks.map((t) => t.id).join(","),
         data: `album:${encodeURIComponent(al.artist)}¦${encodeURIComponent(al.album)}`,
       })
@@ -1859,7 +1861,7 @@ async function doEnrichLookup(i) {
   try {
     const r = await api("/dl/enrich/lookup", {
       method: "POST",
-      body: JSON.stringify({ collection: "musik", artist: a.artist, album: a.album, key: a.key }),
+      body: JSON.stringify({ collection: "musik", artist: a.artist, album: a.album, key: a.key, force: a.state === "done" }),
     });
     a.entry = r.entry;
     a.state = "done";

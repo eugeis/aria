@@ -260,6 +260,10 @@ struct LookupBody {
     artist: String,
     album: String,
     key: Option<String>,
+    /// Skip the cache (the UI's ↻ re-search button; also used to escape a
+    /// cached miss from an older query strategy).
+    #[serde(default)]
+    force: bool,
 }
 
 async fn handle_lookup(
@@ -276,8 +280,8 @@ async fn handle_lookup(
     });
 
     // Already cached (a search that found nothing is cached too — the
-    // network is the expensive part, not the answer).
-    {
+    // network is the expensive part, not the answer). `force` bypasses it.
+    if !body.force {
         let cache = state.enrich.cache.lock().await;
         if let Some(e) = cache.get(&key) {
             return Json(serde_json::json!({
