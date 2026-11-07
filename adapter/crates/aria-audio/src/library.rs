@@ -174,6 +174,30 @@ pub struct TagEdit {
     pub comment: Option<String>,
 }
 
+/// Physically truncate a legacy ID3v1 trailer (the file's last 128 bytes)
+/// when present. Detection is the standard one — the `TAG` magic at
+/// exactly `len - 128` plus a sane genre byte (`0xFF` = none, or < 148) —
+/// so a real trailer is never confused with audio data. lofty keeps the
+/// v1 out of future WRITES once it is removed from the tag set, but the
+/// bytes stay on disk; this removes them (and the reader then never sees
+/// the stale single-byte-encoded fields at all).
+fn strip_id3v1_trailer(path: &Path) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let len = fs::metadata(path)?.len();
+    if len < 128 {
+        return Ok(());
+    }
+    let mut f = fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let mut tail = [0u8; 128];
+    f.seek(SeekFrom::End(-128))?;
+    f.read_exact(&mut tail)?;
+    let genre = tail[127];
+    if tail[..3] == *b"TAG" && (genre == 0xFF || genre < 148) {
+        f.set_len(len - 128)?;
+    }
+    Ok(())
+}
+
 /// Write the given values into the file's primary tag (creating one when
 /// missing — the format's native tag type). Only the provided (non-None)
 /// fields are touched. Used by the reorg feature's "apply the LLM
@@ -227,6 +251,11 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
             tag.set_genre(v.clone());
         }
         if let Some(v) = &edit.language {
+            // lofty's common Accessor has no language SETTER, so language
+            // rides a raw TLAN item — remove any existing one first, or
+            // every re-tag appends another frame (the scan then logs
+            // "Replaced frame with ID TLAN" for each duplicate).
+            tag.remove_key(&lofty::tag::ItemKey::Language);
             tag.push(lofty::tag::TagItem::new(
                 lofty::tag::ItemKey::Language,
                 lofty::tag::ItemValue::Text(v.clone()),
@@ -246,6 +275,9 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
     bound
         .save(lofty::config::WriteOptions::default())
         .map_err(|e| e.to_string())?;
+    // The in-memory drop keeps lofty from REWRITING the v1, but the old
+    // 128 bytes stay on disk — truncate them physically.
+    strip_id3v1_trailer(path).map_err(|e| e.to_string())?;
     // Verify the audio survived: still parseable, and the size moved only by
     // the delta of the (small) tag, not by losing the audio.
     let new_len = fs::metadata(path).map(|m| m.len()).unwrap_or(0) as i64;
@@ -265,6 +297,21 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
         return Err("tag write verification failed (size/parse) — original restored".to_string());
     }
     Ok(())
+}
+
+/// How many language items (TLAN / LANGUAGE / ©lang) the primary tag
+/// carries — 1 after any `set_tags` with a language, regardless of how
+/// often the value was re-written (guards against stacked duplicates).
+pub fn language_frame_count(path: &Path) -> usize {
+    let Ok(tagged) = lofty::read_from_path(path) else {
+        return 0;
+    };
+    let Some(tag) = tagged.primary_tag() else {
+        return 0;
+    };
+    tag.items()
+        .filter(|i| i.key() == &lofty::tag::ItemKey::Language)
+        .count()
 }
 
 /// Read back (title, genre, language) from a file's primary tag — used to

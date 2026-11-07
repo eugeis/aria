@@ -1704,14 +1704,54 @@ mod set_tags_in_place {
             },
         );
         assert!(r.is_ok(), "v1-boundary file must not break the write: {r:?}");
-        // The ID3v1 trailer is gone, the new ID3v2 title reads back.
+        // The ID3v1 trailer is physically gone, the new ID3v2 title reads
+        // back, and the audio survived the truncate.
         let bytes = std::fs::read(&p).unwrap();
         assert!(
-            !bytes.len() >= 128 && &bytes[bytes.len() - 128..bytes.len() - 125] == b"TAG",
-            "the ID3v1 trailer must be dropped"
+            bytes.len() < 128 || &bytes[bytes.len() - 128..bytes.len() - 125] != b"TAG",
+            "the ID3v1 trailer must be physically dropped (len {})",
+            bytes.len()
         );
         let (title, _, _) = aria_audio::read_tag_summary(&p);
         assert_eq!(title, "New Title");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Re-tagging a file that already carries a TLAN must REPLACE it, not
+    /// append another frame — repeated apply-tags runs used to stack
+    /// duplicates (the scan logged "Replaced frame with ID TLAN" for each).
+    #[test]
+    fn re_tagging_language_does_not_duplicate_tlan() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-tag-tlan-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("tlan.mp3");
+        std::fs::write(&p, minimal_mp3()).unwrap();
+
+        for lang in ["Deutsch", "Englisch", "Russisch"] {
+            aria_audio::set_tags(
+                &p,
+                &aria_audio::TagEdit {
+                    language: Some(lang.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            aria_audio::language_frame_count(&p),
+            1,
+            "three re-tags must leave exactly one TLAN frame"
+        );
+        let (_, _, language) = aria_audio::read_tag_summary(&p);
+        assert_eq!(language, "Russisch");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
