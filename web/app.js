@@ -12,6 +12,9 @@ let openPlaylist = null;     // current detail view {id, name, items:[...]}
 let searchMode = "library";
 let searchHits = [];         // current result rows (playable or youtube)
 let queueTimer = null;
+// "artists" = the metadata tree (Künstler → Album), "folders" = the
+// on-disk structure (Sprache → Genre → Künstler → Album) after a reorg.
+let libView = localStorage.getItem("aria-lib-view") || "artists";
 
 // ── player ────────────────────────────────────────────────────────────────
 const player = {
@@ -702,41 +705,118 @@ function trackRowHtml(t, opts = {}) {
   </div>`;
 }
 
+function allLibraryTracks() {
+  return (
+    library?.collections?.flatMap((c) => c.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks))) || []
+  );
+}
+
+// Build the folder tree from the tracks' on-disk paths (rel_path):
+// every path segment before the file name is a folder node.
+function buildFolderTree(tracks) {
+  const root = { children: new Map(), tracks: [] };
+  for (const t of tracks) {
+    const segs = (t.rel_path || "").split("/").filter(Boolean);
+    let node = root;
+    for (let i = 0; i < segs.length - 1; i++) {
+      const s = segs[i];
+      if (!node.children.has(s)) node.children.set(s, { children: new Map(), tracks: [] });
+      node = node.children.get(s);
+    }
+    node.tracks.push(t);
+  }
+  return root;
+}
+
+function folderTrackCount(node) {
+  return node.tracks.length + [...node.children.values()].reduce((n, c) => n + folderTrackCount(c), 0);
+}
+
+function folderNodeHtml(node, name, depth) {
+  const kids = [...node.children.entries()]
+    .map(([n, ch]) => folderNodeHtml(ch, n, depth + 1))
+    .join("");
+  const rows = node.tracks.map((t) => trackRowHtml(t)).join("");
+  const ids = [];
+  const collect = (x) => {
+    x.tracks.forEach((t) => ids.push(t.id));
+    x.children.forEach((c) => collect(c));
+  };
+  collect(node);
+  const head =
+    ids.length > 1
+      ? `<div class="album-head"><span></span><span class="t-dur">Zeit</span><span class="t-actions">
+           <button class="act ghost" data-act="playall-ids" data-ids="${ids.join(",")}" title="Ordner abspielen">▶ Ordner</button>
+         </span></div>`
+      : "";
+  return `<details class="folder f${Math.min(depth, 4)}" ${depth === 0 ? "open" : ""}>
+    <summary><b>${esc(name)}</b> <span class="muted">(${folderTrackCount(node)})</span></summary>
+    ${head}${kids}${rows}
+  </details>`;
+}
+
+function renderCollectionFolders(c) {
+  const tracks = c.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks));
+  const tree = buildFolderTree(tracks);
+  if (!tree.children.size && !tree.tracks.length) return `<p class="muted">Keine Ordner-Struktur.</p>`;
+  return [...tree.children.entries()].map(([n, ch]) => folderNodeHtml(ch, n, 0)).join("") ||
+    tracks.map((t) => trackRowHtml(t)).join("");
+}
+
 function renderBrowse() {
   const box = $("browse");
   if (!library.collections?.length) {
     box.innerHTML = `<p class="muted">Die Bibliothek ist leer.</p>`;
     return;
   }
-  box.innerHTML = library.collections
-    .map((c) => `
+  const toggle = `
+    <div class="view-toggle" role="tablist" aria-label="Bibliothek-Ansicht">
+      <button data-act="libview" data-v="artists" class="${libView === "artists" ? "on" : ""}">Künstler</button>
+      <button data-act="libview" data-v="folders" class="${libView === "folders" ? "on" : ""}">Ordner</button>
+      <span class="muted view-hint">${libView === "folders" ? "die Ordner-Struktur auf der Platte" : "Künstler → Album → Titel"}</span>
+    </div>`;
+  box.innerHTML =
+    toggle +
+    library.collections
+      .map((c) => {
+        const body =
+          libView === "folders"
+            ? renderCollectionFolders(c)
+            : c.artists
+                .map(
+                  (a) => `
+            <details class="artist">
+              <summary><b>${esc(a.name)}</b></summary>
+              ${a.albums
+                .map(
+                  (al) => `
+                <details class="album">
+                  <summary>${esc(al.name)}${al.year ? ` <span class="muted">(${esc(al.year)})</span>` : ""} <span class="muted">(${al.tracks.length})</span></summary>
+                  <div class="album-head"><span></span><span class="t-dur">Zeit</span><span class="t-actions"></span>
+                    <span class="t-actions"><button class="act ghost" data-act="playall-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album abspielen">▶ Album</button>
+                    <button class="act ghost" data-act="pladd-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album zur Playlist">＋ Album</button>
+                    <button class="act ghost" data-act="off-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album für offline speichern">⤓ Album offline</button></span>
+                  </div>
+                  ${al.tracks.map((t) => trackRowHtml(t)).join("")}
+                </details>`
+                )
+                .join("")}
+            </details>`
+                )
+                .join("");
+        return `
       <details class="col" ${c.name === "musik" ? "open" : ""}>
         <summary><b>${esc(c.name)}</b> <span class="muted">(${c.kind} · ${c.count})</span></summary>
-        ${c.artists
-          .map(
-            (a) => `
-          <details class="artist">
-            <summary><b>${esc(a.name)}</b></summary>
-            ${a.albums
-              .map(
-                (al) => `
-              <details class="album">
-                <summary>${esc(al.name)}${al.year ? ` <span class="muted">(${esc(al.year)})</span>` : ""} <span class="muted">(${al.tracks.length})</span></summary>
-                <div class="album-head"><span></span><span class="t-dur">Zeit</span><span class="t-actions"></span>
-                  <span class="t-actions"><button class="act ghost" data-act="playall-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album abspielen">▶ Album</button>
-                  <button class="act ghost" data-act="pladd-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album zur Playlist">＋ Album</button>
-                  <button class="act ghost" data-act="off-album" data-artist="${esc(a.name)}" data-album="${esc(al.name)}" title="Album für offline speichern">⤓ Album offline</button></span>
-                </div>
-                ${al.tracks.map((t) => trackRowHtml(t)).join("")}
-              </details>`
-              )
-              .join("")}
-          </details>`
-          )
-          .join("")}
-      </details>`
-    )
-    .join("");
+        ${body}
+      </details>`;
+      })
+      .join("");
+}
+
+function playIds(ids) {
+  const byId = new Map(allLibraryTracks().map((t) => [t.id, t]));
+  const list = ids.map((id) => byId.get(Number(id))).filter(Boolean);
+  if (list.length) playContext(list, 0);
 }
 
 document.addEventListener("click", async (e) => {
@@ -745,6 +825,11 @@ document.addEventListener("click", async (e) => {
   const act = b.dataset.act;
   if (act === "play") playTrackId(Number(b.dataset.id));
   else if (act === "pladd") addTrackToPlaylist(Number(b.dataset.id));
+  else if (act === "libview") {
+    libView = b.dataset.v;
+    localStorage.setItem("aria-lib-view", libView);
+    renderBrowse();
+  } else if (act === "playall-ids") playIds(b.dataset.ids.split(",").filter(Boolean));
   else if (act === "playall-album") playAlbum(b.dataset.artist, b.dataset.album);
   else if (act === "pladd-album") addAlbumToPlaylist(b.dataset.artist, b.dataset.album);
   else if (act === "t-off")
