@@ -24,6 +24,7 @@ mod music;
 mod reorg;
 mod router;
 mod scan;
+mod sources;
 mod state;
 mod stream;
 mod web;
@@ -242,6 +243,7 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
         .merge(web::routes())
         .merge(music::routes())
         .merge(reorg::routes())
+        .merge(sources::routes())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);
 

@@ -59,6 +59,14 @@ name = "predigt"
 kind = "sermon"
 path = "/media/predigt"
 
+# Free, legally usable sounds (music for video, effects, …) downloaded from
+# the app's "Sounds" sources (Openverse / Freesound / Pixabay). License +
+# attribution live in each file's comment tag.
+[[collections.items]]
+name = "sounds"
+kind = "music"
+path = "/media/sounds"
+
 # The brain (the rendered Mosaic app). In the li7 pod this is loopback.
 [brain]
 base_url = "http://127.0.0.1:3000"

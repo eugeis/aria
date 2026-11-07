@@ -655,6 +655,8 @@ function switchTab(name) {
   if (name === "offline") renderOffline();
   if (name === "playlists") loadRecent();
   if (name === "reorg") loadReorgCollections();
+  if (name === "sounds") loadSources();
+  if (name !== "sounds") stopSrcPreview();
 }
 
 document.querySelectorAll(".tabs button, #bottom-nav button[data-tab]").forEach((b) =>
@@ -1265,3 +1267,126 @@ $("cookie-delete").addEventListener("click", async () => {
 });
 
 boot();
+
+
+// ── free sound sources (search / preview / download) ─────────────────────
+// Sources: Openverse (no key), Freesound + Pixabay (free API keys). The
+// downloaded file lands in the `sounds` collection with license + source
+// written into its tags.
+let srcResults = [];
+let srcPreviewAudio = null;
+let srcPreviewUrl = null;
+
+function stopSrcPreview() {
+  if (srcPreviewAudio) { srcPreviewAudio.pause(); srcPreviewAudio.src = ""; }
+  srcPreviewUrl = null;
+}
+
+async function loadSources() {
+  const sel = $("src-source");
+  if (sel.options.length) return;
+  try {
+    const r = await api("/dl/sources");
+    sel.innerHTML = r.sources
+      .map((x) => `<option value="${esc(x.name)}"${x.enabled ? "" : " disabled"}>${esc(x.name)}${x.enabled ? "" : " (Key fehlt)"}</option>`)
+      .join("");
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function fmtDur(sec) {
+  if (!sec) return "";
+  const s = Math.round(sec);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function srcRowHtml(t, i) {
+  return `
+  <div class="pl-row">
+    <span class="t-no"></span>
+    <span class="t-title">${esc(t.title || "(unbetitelt)")}</span>
+    <span class="t-meta muted">${esc(t.creator || "—")}${fmtDur(t.duration_sec) ? " · " + fmtDur(t.duration_sec) : ""} · <span class="lic" title="${esc(t.license || "")}">${esc(t.license || "?")}</span></span>
+    <span class="t-dur"></span>
+    <span class="t-actions">
+      <button class="act" data-src-prev="${i}" title="Anhören">${srcPreviewUrl === (t.preview_url || t.url) ? "⏸" : "▶"}</button>
+      <button class="act ghost" data-src-dl="${i}" title="In die Bibliothek laden">⤓ Laden</button>
+    </span>
+  </div>`;
+}
+
+async function doSourceSearch() {
+  const q = $("src-q").value.trim();
+  if (!q) return toast("Suchbegriff eingeben", true);
+  stopSrcPreview();
+  $("src-search").disabled = true;
+  $("src-summary").textContent = "Suche läuft …";
+  try {
+    const r = await api(
+      `/dl/sources/search?source=${encodeURIComponent($("src-source").value)}` +
+      `&q=${encodeURIComponent(q)}` +
+      `&license=${encodeURIComponent($("src-license").value)}`
+    );
+    srcResults = r.results || [];
+    $("src-summary").textContent = srcResults.length
+      ? `${r.total ?? srcResults.length} Treffer — ${srcResults.length} angezeigt`
+      : "Keine Treffer.";
+    $("src-results").innerHTML = srcResults.length
+      ? srcResults.map(srcRowHtml).join("")
+      : `<p class="muted">—</p>`;
+  } catch (e) {
+    $("src-summary").textContent = "";
+    srcResults = [];
+    toast(e.message, true);
+  } finally {
+    $("src-search").disabled = false;
+  }
+}
+
+function toggleSrcPreview(i) {
+  const t = srcResults[i];
+  if (!t) return;
+  const url = t.preview_url || t.url;
+  if (!url) return;
+  if (srcPreviewUrl === url && srcPreviewAudio && !srcPreviewAudio.paused) {
+    srcPreviewAudio.pause();
+    srcPreviewUrl = null;
+  } else {
+    if (!srcPreviewAudio) srcPreviewAudio = new Audio();
+    srcPreviewAudio.src = url;
+    srcPreviewAudio.play().catch((e) => toast("Vorschau fehlgeschlagen: " + e.message, true));
+    srcPreviewUrl = url;
+  }
+  $("src-results").innerHTML = srcResults.map(srcRowHtml).join("");
+}
+
+async function srcDownload(i) {
+  const t = srcResults[i];
+  if (!t) return;
+  if (!confirm(`„${t.title}“ (${t.license || "?"}) in die Bibliothek (Sounds) laden?`)) return;
+  try {
+    const r = await api("/dl/sources/download", {
+      method: "POST",
+      body: JSON.stringify({
+        url: t.url,
+        title: t.title,
+        creator: t.creator || "",
+        license: t.license || "",
+        attribution: t.landing_url ? `Quelle: ${t.landing_url}` : "",
+      }),
+    });
+    toast(`Geladen: ${t.title}`);
+    loadLibrary();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+$("src-search").addEventListener("click", doSourceSearch);
+$("src-q").addEventListener("keydown", (e) => { if (e.key === "Enter") doSourceSearch(); });
+$("src-results").addEventListener("click", (e) => {
+  const p = e.target.closest("button[data-src-prev]");
+  if (p) return toggleSrcPreview(Number(p.dataset.srcPrev));
+  const d = e.target.closest("button[data-src-dl]");
+  if (d) return srcDownload(Number(d.dataset.srcDl));
+});

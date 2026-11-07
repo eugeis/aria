@@ -170,6 +170,8 @@ pub struct TagEdit {
     pub album: Option<String>,
     pub genre: Option<String>,
     pub language: Option<String>,
+    /// Free text (license/attribution for downloaded free sounds, …).
+    pub comment: Option<String>,
 }
 
 /// Write the given values into the file's primary tag (creating one when
@@ -229,6 +231,9 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
                 lofty::tag::ItemKey::Language,
                 lofty::tag::ItemValue::Text(v.clone()),
             ));
+        }
+        if let Some(v) = &edit.comment {
+            tag.set_comment(v.clone());
         }
     }
     bound

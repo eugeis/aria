@@ -835,6 +835,7 @@ pub fn apply_tags(lib: &aria_audio::Library, items: &[TagRow]) -> (usize, Vec<St
                 album: clean(r.album.clone()),
                 genre: clean(r.genre.clone()),
                 language: clean(r.language.clone()),
+                comment: None,
             },
         ) {
             errors.push(format!("{}: {e}", t.title));

@@ -41,6 +41,7 @@
   <button data-tab="queue">Downloads <span id="queue-count" class="count hidden">0</span></button>
   <button data-tab="offline">Offline <span id="offline-count" class="count hidden">0</span></button>
   <button data-tab="reorg">Organizer</button>
+  <button data-tab="sounds">Sounds</button>
   <button data-tab="cookies">YouTube-Login</button>
 </nav>
 
@@ -158,6 +159,29 @@
   </section>
 
   <!-- OFFLINE -->
+  <!-- FREE SOUND SOURCES (CC / royalty-free music & fx for videos) -->
+  <section id="tab-sounds" class="tab">
+    <p class="muted">
+      Freie Musik & Soundeffekte für deine Videos (Creative-Commons / royalty-free)
+      suchen, anhören und in die Bibliothek laden — Lizenz und Quelle werden in die
+      Datei gespeichert.
+    </p>
+    <div class="row">
+      <select id="src-source"></select>
+      <select id="src-license">
+        <option value="any">Alle Lizenzen</option>
+        <option value="cc0">CC0 (Public Domain)</option>
+        <option value="by">CC-BY</option>
+        <option value="by-nc">CC-BY-NC</option>
+        <option value="by-nc-nd">CC-BY-NC-ND</option>
+      </select>
+      <input type="search" id="src-q" placeholder="z. B. piano, regnen, worship, soundtrack …" />
+      <button id="src-search">Suchen</button>
+    </div>
+    <div id="src-summary" class="muted"></div>
+    <div id="src-results" class="pl-items"></div>
+  </section>
+
   <section id="tab-offline" class="tab">
     <p class="muted">
       Auf diesem Gerät gespeicherte Dateien (Cache Storage) — abspielbar auch ohne
@@ -207,6 +231,7 @@
   <div class="more-panel">
     <button data-tab="offline">Offline <span id="more-offline-count" class="count hidden">0</span><small>gespeicherte Dateien</small></button>
     <button data-tab="reorg">Organizer<small>Bibliothek aufräumen (Admin)</small></button>
+    <button data-tab="sounds">Sounds<small>freie Musik & Effekte suchen, laden</small></button>
     <button data-tab="cookies">YouTube-Login<small>Premium-Cookies für Downloads</small></button>
   </div>
 </div>
