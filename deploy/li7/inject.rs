@@ -361,22 +361,49 @@ fn main() {
     // would otherwise mask the volumes step on a fresh chart.
     let original = text.clone();
 
-    // Re-injecting a chart that ALREADY carries the sidecar must still
-    // refresh its image tag — the insertion block below is skipped when
-    // "aria-ask" is present, which would otherwise leave the old tag in
-    // place (the deploy then ships the previous adapter build).
+    // Re-injecting a chart that ALREADY carries the sidecar must re-sync
+    // the WHOLE container block (image tag, env, mounts) — a tag-only
+    // refresh would silently drop env changes (this is how a fixed
+    // RUST_BACKTRACE stayed out of a re-injected chart). The block runs
+    // from the li7 marker comment to the next pod-spec-level key
+    // (6-space indent).
     {
-        const PREFIX: &str = "mosaic/aria-ask:";
-        if let Some(i) = text.find(PREFIX) {
-            let start = i + PREFIX.len();
-            let rest = &text[start..];
-            let end = rest
-                .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
-                .unwrap_or(0);
-            let old = rest[..end].to_string();
-            if old != tag {
-                text.replace_range(start..start + end, &tag);
-                println!("refreshed the aria-ask sidecar tag {old} -> {tag} in {dep:?}");
+        const MARKER: &str = "# li7-only sidecar (injected by deploy/li7/inject.rs";
+        match text.find(MARKER) {
+            Some(i) => {
+                let line_start = text[..i].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                let boundary = text[line_start..]
+                    .match_indices("\n      ")
+                    .find(|(off, _)| {
+                        let after = line_start + off + 1 + 6;
+                        after < text.len() && !text[after..].starts_with(' ')
+                    })
+                    .map(|(off, _)| line_start + off + 1)
+                    .unwrap_or(text.len());
+                // sidecar starts with a newline (the prelude ends with one
+                // too); drop it here so the replacement is byte-exact and
+                // idempotent — the blank line before the marker survives.
+                let new: &str = sidecar.strip_prefix('\n').unwrap_or(sidecar.as_str());
+                let old = text[line_start..boundary].to_string();
+                if old != new {
+                    text.replace_range(line_start..boundary, new);
+                    println!("re-synced the aria-ask sidecar block in {dep:?}");
+                }
+            }
+            None => {
+                const PREFIX: &str = "mosaic/aria-ask:";
+                if let Some(i) = text.find(PREFIX) {
+                    let start = i + PREFIX.len();
+                    let rest = &text[start..];
+                    let end = rest
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                        .unwrap_or(0);
+                    let old = rest[..end].to_string();
+                    if old != tag {
+                        text.replace_range(start..start + end, &tag);
+                        println!("refreshed the aria-ask sidecar tag {old} -> {tag} in {dep:?}");
+                    }
+                }
             }
         }
     }
