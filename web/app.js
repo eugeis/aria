@@ -712,11 +712,14 @@ function allLibraryTracks() {
 }
 
 // Build the folder tree from the tracks' on-disk paths (rel_path):
-// every path segment before the file name is a folder node.
-function buildFolderTree(tracks) {
+// every path segment before the file name is a folder node. rel_path is
+// relative to the media root and starts with the collection dir
+// ("musik/Deutsch/…") — drop it, the collection is already the section.
+function buildFolderTree(tracks, collection) {
   const root = { children: new Map(), tracks: [] };
   for (const t of tracks) {
-    const segs = (t.rel_path || "").split("/").filter(Boolean);
+    let segs = (t.rel_path || "").split("/").filter(Boolean);
+    if (collection && segs.length > 1 && segs[0] === collection) segs = segs.slice(1);
     let node = root;
     for (let i = 0; i < segs.length - 1; i++) {
       const s = segs[i];
@@ -757,7 +760,7 @@ function folderNodeHtml(node, name, depth) {
 
 function renderCollectionFolders(c) {
   const tracks = c.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks));
-  const tree = buildFolderTree(tracks);
+  const tree = buildFolderTree(tracks, c.name);
   if (!tree.children.size && !tree.tracks.length) return `<p class="muted">Keine Ordner-Struktur.</p>`;
   return [...tree.children.entries()].map(([n, ch]) => folderNodeHtml(ch, n, 0)).join("") ||
     tracks.map((t) => trackRowHtml(t)).join("");
