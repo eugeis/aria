@@ -762,8 +762,10 @@ function renderCollectionFolders(c) {
   const tracks = c.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks));
   const tree = buildFolderTree(tracks, c.name);
   if (!tree.children.size && !tree.tracks.length) return `<p class="muted">Keine Ordner-Struktur.</p>`;
-  return [...tree.children.entries()].map(([n, ch]) => folderNodeHtml(ch, n, 0)).join("") ||
-    tracks.map((t) => trackRowHtml(t)).join("");
+  const kids = [...tree.children.entries()].map(([n, ch]) => folderNodeHtml(ch, n, 0)).join("");
+  // tracks sitting directly in the collection root (no subfolder)
+  const loose = tree.tracks.map((t) => trackRowHtml(t)).join("");
+  return kids + loose;
 }
 
 function renderBrowse() {
