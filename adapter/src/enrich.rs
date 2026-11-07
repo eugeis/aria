@@ -332,28 +332,61 @@ async fn do_lookup(
         note: String::new(),
         updated_at: now_secs(),
     };
-    // 1) MusicBrainz release search.
-    enrich.pace().await;
-    let url = format!(
-        "{MB_BASE}/release/?query={}&fmt=json&limit=5",
-        urlencoded(&format!(r#"release:"{album}" AND artist:"{artist}""#))
-    );
-    let releases: Vec<serde_json::Value> = match enrich.client.get(&url).send().await {
-        Ok(r) if r.status().is_success() => r
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(|v| v.get("releases").and_then(|r| r.as_array()).cloned())
-            .unwrap_or_default(),
-        Ok(r) => {
-            entry.note = format!("MusicBrainz HTTP {}", r.status());
-            return entry;
+    // 1) MusicBrainz release search. The local album names often carry
+    //    YouTube-playlist suffixes ("Grace To Grace - Hillsong Worship"),
+    //    so the strict query gets candidates: full title, then the title
+    //    minus its last " - X" part — each first as a field-prefixed
+    //    query, then as a full-text fallback. One retry per request on
+    //    5xx/network blips (MB returns occasional 503s under load).
+    let mut candidates: Vec<String> = vec![album.to_string()];
+    if let Some(pos) = album.rfind(" - ") {
+        if pos > 4 {
+            candidates.push(album[..pos].to_string());
         }
-        Err(e) => {
-            entry.note = format!("MusicBrainz error: {e}");
-            return entry;
+    }
+    let mut releases: Vec<serde_json::Value> = Vec::new();
+    let mut last_err = String::new();
+    'queries: for cand in &candidates {
+        for query in [
+            format!(r#"release:"{cand}" AND artist:"{artist}""#),
+            format!("\"{cand}\" {artist}"),
+        ] {
+            let url = format!("{MB_BASE}/release/?query={}&fmt=json&limit=5", urlencoded(&query));
+            for _attempt in 0..2 {
+                enrich.pace().await;
+                match enrich.client.get(&url).send().await {
+                    Ok(r) if r.status().is_success() => {
+                        let got = r
+                            .json::<serde_json::Value>()
+                            .await
+                            .ok()
+                            .and_then(|v| v.get("releases").and_then(|r| r.as_array()).cloned())
+                            .unwrap_or_default();
+                        if !got.is_empty() {
+                            releases = got;
+                            break 'queries;
+                        }
+                        break; // empty result — next query form
+                    }
+                    Ok(r) => {
+                        last_err = format!("MusicBrainz HTTP {}", r.status());
+                        if r.status().is_client_error() {
+                            break; // 4xx (e.g. 400 bad query) won't heal on retry
+                        }
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                    Err(e) => {
+                        last_err = format!("MusicBrainz error: {e}");
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+            }
         }
-    };
+    }
+    if releases.is_empty() && !last_err.is_empty() {
+        entry.note = last_err;
+        return entry;
+    }
 
     let mut best: Option<(f64, serde_json::Value)> = None;
     for rel in &releases {
@@ -407,36 +440,42 @@ async fn do_lookup(
         .unwrap_or("");
 
     // 2) Cover Art Archive front image (release group first — it covers
-    //    all editions — then the release itself).
+    //    all editions — then the release itself; one retry per source).
     for base in [
         format!("{CAA_BASE}/release-group/{rgid}"),
         format!("{CAA_BASE}/release/{}", entry.mbid),
     ] {
         let url = format!("{base}/front-500");
-        enrich.pace().await;
-        match enrich.client.get(&url).send().await {
-            Ok(r) if r.status().is_success() => {
-                let mime = r
-                    .headers()
-                    .get(axum::http::header::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("image/jpeg")
-                    .to_string();
-                if let Ok(bytes) = r.bytes().await {
-                    if (8 * 1024..=8 * 1024 * 1024).contains(&bytes.len()) {
-                        entry.art_b64 = base64_encode(&bytes);
-                        entry.art_mime = mime;
-                        break;
+        'retry: for _attempt in 0..2 {
+            enrich.pace().await;
+            match enrich.client.get(&url).send().await {
+                Ok(r) if r.status().is_success() => {
+                    let mime = r
+                        .headers()
+                        .get(axum::http::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("image/jpeg")
+                        .to_string();
+                    if let Ok(bytes) = r.bytes().await {
+                        if (8 * 1024..=8 * 1024 * 1024).contains(&bytes.len()) {
+                            entry.art_b64 = base64_encode(&bytes);
+                            entry.art_mime = mime;
+                        }
                     }
+                    break 'retry;
+                }
+                Ok(_) => break 'retry, // 404 — try the next source
+                Err(e) => {
+                    if entry.art_b64.is_empty() {
+                        entry.note = format!("Cover Art error: {e}");
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue 'retry;
                 }
             }
-            Ok(_) => {} // 404 — try the next source
-            Err(e) => {
-                if entry.art_b64.is_empty() {
-                    entry.note = format!("Cover Art error: {e}");
-                }
-                break;
-            }
+        }
+        if !entry.art_b64.is_empty() {
+            break;
         }
     }
     if entry.art_b64.is_empty() && entry.note.is_empty() {
