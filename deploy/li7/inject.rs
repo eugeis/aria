@@ -49,6 +49,11 @@ const SIDECAR: &str = r#"
               value: "https://aria.eisler-systems.de"
             - name: ARIA_DATA_DIR
               value: /data/adapter
+            # Full panic backtraces: a char-boundary slice in a tag write
+            # once took the adapter down with no trace to read (lofty v1
+            # writer); backtraces cost nothing until a panic happens.
+            - name: RUST_BACKTRACE
+              value: "1"
             - name: ARIA_BRAIN_URL
               value: "http://127.0.0.1:3000"
             - name: ARIA_BRAIN_TOKEN

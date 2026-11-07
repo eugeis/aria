@@ -1663,6 +1663,58 @@ mod set_tags_in_place {
         v
     }
 
+    /// Live incident: files with a legacy ID3v1 trailer whose title field
+    /// carries a non-ASCII byte at the 30-byte field boundary made lofty's
+    /// v1 writer panic (`end byte index 30 is not a char boundary`),
+    /// killing the apply-tags task mid-rescan. The fix drops ID3v1 before
+    /// writing — this test is the exact crash shape.
+    #[test]
+    fn id3v1_non_ascii_at_field_boundary_does_not_panic() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-tag-v1-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("v1.mp3");
+        // ID3v2 (empty) + audio frames + an ID3v1 trailer (128 bytes).
+        let mut v1 = b"TAG".to_vec();
+        let mut title = vec![0u8; 30];
+        title[..29].fill(b'a');
+        title[29] = 0xED; // 'í' (ISO-8859-1) landing exactly at byte 30
+        v1.extend_from_slice(&title);
+        v1.extend_from_slice(&[0u8; 30]); // artist
+        v1.extend_from_slice(&[0u8; 30]); // album
+        v1.extend_from_slice(b"2005");
+        v1.extend_from_slice(&[0u8; 30]); // comment (28) + zero bytes (2)
+        v1.push(0xFF); // genre: none
+        assert_eq!(v1.len(), 128);
+        let mut data = minimal_mp3();
+        data.extend_from_slice(&v1);
+        std::fs::write(&p, &data).unwrap();
+
+        let r = aria_audio::set_tags(
+            &p,
+            &aria_audio::TagEdit {
+                title: Some("New Title".into()),
+                ..Default::default()
+            },
+        );
+        assert!(r.is_ok(), "v1-boundary file must not break the write: {r:?}");
+        // The ID3v1 trailer is gone, the new ID3v2 title reads back.
+        let bytes = std::fs::read(&p).unwrap();
+        assert!(
+            !bytes.len() >= 128 && &bytes[bytes.len() - 128..bytes.len() - 125] == b"TAG",
+            "the ID3v1 trailer must be dropped"
+        );
+        let (title, _, _) = aria_audio::read_tag_summary(&p);
+        assert_eq!(title, "New Title");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The live library hit this: an in-place tag rewrite must succeed,
     /// keep the audio intact, and make the new values readable.
     #[test]

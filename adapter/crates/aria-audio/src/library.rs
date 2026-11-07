@@ -236,6 +236,13 @@ pub fn set_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
             tag.set_comment(v.clone());
         }
     }
+    // Legacy ID3v1 trailer: drop it before writing. lofty's v1 writer
+    // panics on non-ASCII values at the fixed 30-byte field boundary (a
+    // live rescan took the adapter down over one), and the data is
+    // redundant anyway — ID3v2 is the primary tag and carries it all.
+    if bound.contains_tag_type(lofty::tag::TagType::Id3v1) {
+        bound.remove(lofty::tag::TagType::Id3v1);
+    }
     bound
         .save(lofty::config::WriteOptions::default())
         .map_err(|e| e.to_string())?;
