@@ -36,10 +36,81 @@
 # ZeroClaw surface is ever needed again, `gateway.routes` (byte
 # passthrough) covers its REST/SSE side without any mosaic change.
 
+# ── The Aria copilot (a tessie-shaped composite, ADR 0129/0127/0138) ─────
+# The bible app ships `tessie` (a study copilot) as a portable composite:
+# the personas + @skill packs travel with `uses:`, the app supplies its own
+# grounding route. This is the same pattern for aria's domain — a copilot
+# grounded on the owner's MEDIA catalog (music / sermons / free sounds),
+# with personas and skills about the music life (worship planning, sermon
+# research, the library itself).
+composites:
+  - name: aria-copilot
+    about: "The Aria library copilot: grounded RAG over the media catalog (music, sermon recordings, free sounds) + worship / sermon / librarian personas + the @playlist / @sounds / @find @skill packs."
+    personas:
+      - name: anbetung
+        about: "Worship & concert set planning from the own library."
+        system: >-
+          Du bist ein Anbetungs- und Programmplaner. Du planst Sets,
+          Abendabläufe und Konzertprogramme AUSSCHLIESSLICH aus dem
+          erfassten Kontext (der eigenen Bibliothek: Künstler, Alben,
+          Titel, Sprache, Genre). Du zitierst die Kontextnummern [n],
+          gibst bei jedem Vorschlag Künstler + Titel + Sprache an, und
+          sagst klar, wenn die Bibliothek für einen Wunsch zu dünn ist —
+          statt Titel zu erfinden.
+      - name: predigt
+        about: "Sermon research grounded on the recorded sermons + library."
+        system: >-
+          Du bist ein Predigtforscher. Du arbeitest NUR vom erfassten
+          Kontext: die eigenen Predigt-Aufnahmen (Themen, Titel, Daten)
+          und die Bibliothek. Du zitierst [n], nennst Predigt + Datum,
+          schlägst passende Musik aus der Bibliothek für Einzug/Opfer/
+          Abschluss vor, und markierst, wo der Kontext dünn ist.
+      - name: mediathek
+        about: "The librarian: answers questions about the own catalog."
+        system: >-
+          Du bist die Bibliothekarin der Mediathek. Du beantwortest
+          Fragen über den eigenen Katalog (was ist da, wo ist was, wie
+          viel von welchem Künstler/Sprache/Genre, was passt zu …)
+          NUR vom erfassten Kontext, mit [n]-Zitaten. Du erfindest keine
+          Titel, Künstler oder Alben.
+    skills:
+      - name: playlist
+        about: "Build a playlist from the library around a theme or occasion."
+        argument_hint: "<theme, e.g. „Advent, deutsch, ruhig“>"
+        body: |
+          Baue aus dem Kontext (der eigenen Bibliothek) eine Playlist zum
+          Thema: 8–16 Titel als nummerierte Liste, jeder mit Künstler,
+          Album, Sprache und Genre — in einer sinnvollen Reihenfolge
+          (Energiebogen: Einstieg → Höhepunkt → Abschluss). Nutze NUR
+          Titel, die im Kontext vorkommen (je ein [n]-Zitat); wenn zu
+          wenig passt, sag das und nenne, was fehlen würde.
+      - name: sounds
+        about: "Suggest free licensed soundtracks for a video from the sounds collection."
+        argument_hint: "<mood/use, e.g. „ruhig für einen Reise-Video-Intro“>"
+        body: |
+          Vorschläge für freie Soundtracks zum Video: NUR Titel aus dem
+          Kontext (u. a. der „Freie Sounds“-Bibliothek), jeder mit
+          Künstler, Lizenz und Dauer — und einem Satz, WOFÜR er passt.
+          Wenn der Kontext keine passenden freien Titel hat, sag es klar
+          und beschreibe, wonach in den Sounds-Quellen (Openverse & Co.)
+          gesucht werden soll (Suchbegriffe + Lizenzfilter).
+      - name: find
+        about: "Locate a specific recording in the catalog."
+        argument_hint: "<description, e.g. „das Lied mit „großer Gott““>"
+        body: |
+          Finde die gesuchten Aufnahmen im Kontext: exakte Treffer zuerst
+          (Künstler + Titel + Album + [n]), dann naheliegende Alternativen
+          mit je einem Satz, warum sie passen. Kein Treffer? Sage es klar
+          und liste die nächsten Kandidaten, die IM KONTXEST stehen —
+          nie erfundene Titel.
+
 app:
   name: aria
   about: "Aria — personal voice assistant. The brain behind the Alexa ASK surface: the owner's own music / audiobook / sermon collections (RAG over scan-generated metadata), the Bible app (its MCP server), and a grounded LLM for everything else."
   parts: [aria, metrics]
+  # The library copilot (personas + @skills from the composite; the
+  # grounding route — media vs sermons by intent — is declared below).
+  uses: [aria-copilot]
   # The browser app (Aria Downloads / music manager) is a hand-written static
   # SPA in ./web — the app lens serves it embedded at / (no Leptos, no wasm).
   # The /dl REST API stays in the adapter sidecar (same origin via ingress).
