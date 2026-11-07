@@ -91,26 +91,27 @@ impl EnrichState {
         }
     }
 
-    fn persist(&self, entry: &EnrichEntry) {
+    /// Cache + image persistence (async — blocking_lock would panic inside
+    /// the tokio runtime). The file writes are tiny; inline is fine.
+    async fn persist(&self, entry: &EnrichEntry) {
+        {
+            let mut cache = self.cache.lock().await;
+            cache.insert(entry.key.clone(), entry.clone());
+            let all: Vec<EnrichEntry> = cache.values().cloned().collect();
+            let file = self.data_dir.join("enrich-cache.json");
+            if let Ok(raw) = serde_json::to_string(&all) {
+                std::fs::write(&file, raw).ok();
+            }
+        }
         if !entry.art_b64.is_empty() {
             let ext = if entry.art_mime.contains("png") { "png" } else { "jpg" };
-            let file = self.data_dir.join("covers").join(format!(
-                "{}.{ext}",
-                sanitize_name(&entry.key)
-            ));
+            let file = self
+                .data_dir
+                .join("covers")
+                .join(format!("{}.{}", sanitize_name(&entry.key), ext));
             if let Ok(bytes) = base64_decode(&entry.art_b64) {
                 std::fs::write(&file, bytes).ok();
             }
-        }
-        let cache: Vec<EnrichEntry> = self
-            .cache
-            .blocking_lock()
-            .values()
-            .cloned()
-            .collect();
-        let file = self.data_dir.join("enrich-cache.json");
-        if let Ok(raw) = serde_json::to_string(&cache) {
-            std::fs::write(&file, raw).ok();
         }
     }
 
@@ -305,7 +306,7 @@ async fn handle_lookup(
     }
     let entry = do_lookup(&state.enrich, &key, &collection, &body.artist, &body.album).await;
     state.enrich.busy.store(false, Ordering::SeqCst);
-    state.enrich.persist(&entry);
+    state.enrich.persist(&entry).await;
     Json(serde_json::json!({"ok": true, "cached": false, "entry": entry})).into_response()
 }
 
