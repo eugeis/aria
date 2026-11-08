@@ -1105,3 +1105,14 @@ main { display: contents; }
 .acc-sub { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-account #logout { padding: 6px 8px; font-size: 14px; }
 .acc-yt { display: block; text-align: center; margin-top: 4px; }
+
+/* offline-mode banner (PWA, ADR 0165 v2) */
+.offline-banner {
+  background: #4a3b16;
+  border-bottom: 1px solid #7a5f22;
+  color: #f5d78e;
+  font-size: 13px;
+  padding: 8px 22px;
+}
+.offline-banner span { display: block; }
+body.offline-mode .searchbox input { border-color: #7a5f22; }

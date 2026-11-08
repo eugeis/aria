@@ -601,20 +601,56 @@ $("offline-verify").addEventListener("click", async () => {
   toast(n ? `${n} Dateien nicht (mehr) im Cache` : "Alles im Cache");
 });
 
+// ── offline mode (PWA: the SW serves the shell + last JSON catalog) ──────
+// navigator.onLine tracks the device's connection; the SW makes the app
+// survive it. Server-bound controls (downloads, enrichment, organizer
+// writes) are disabled while offline.
+
+const OFFLINE_TOOLS = [
+  "src-search", "enrich-scan", "reorg-plan", "reorg-suggest", "pl-download-all", "yt-add",
+];
+
+function setOfflineMode(off) {
+  $("offline-banner").classList.toggle("hidden", !off);
+  document.body.classList.toggle("offline-mode", off);
+  for (const id of OFFLINE_TOOLS) {
+    const el = $(id);
+    if (el) el.disabled = off;
+  }
+}
+
+window.addEventListener("online", () => {
+  setOfflineMode(false);
+  toast("Wieder online");
+});
+window.addEventListener("offline", () => setOfflineMode(true));
+
 // ── auth ──────────────────────────────────────────────────────────────────
 
 async function boot() {
   let me;
+  let netDown = false;
   try {
     me = await api("/dl/me");
-  } catch {
+  } catch (e) {
+    // A TypeError (or a fetch-level failure) means the SERVER is
+    // unreachable — different from a 401 (server fine, not logged in).
+    netDown = e instanceof TypeError || /fetch|network|failed to fetch/i.test(String(e && e.message || ""));
     me = { ok: false };
   }
   if (!me.ok) {
+    if (netDown) {
+      // The SW may still serve a CACHED /dl/me on the next load; until
+      // then: explain that login needs one online visit.
+      setOfflineMode(true);
+      $("login-error").textContent =
+        "Keine Verbindung zum Server. Einmalig online anmelden — danach öffnet die App auch offline (mit letztem Stand + gespeicherten Titeln).";
+    }
     $("login").classList.remove("hidden");
     $("login-user").focus();
     return;
   }
+  setOfflineMode(!navigator.onLine);
   const u = me.user || {};
   window.__me = u;
   const who = u.name || u.user || "?";
