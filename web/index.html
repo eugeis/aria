@@ -263,6 +263,25 @@
       <div id="search-results" class="results"></div>
     </section>
   </div>
+  <!-- RIGHT RAIL (≥1280px) — the `layout: app` window model (ADR 0168): a
+       persistent "Now Playing" + queue column, the desktop counterpart of
+       the mobile full player -->
+  <aside id="rail" class="rail" aria-label="Wiedergabe">
+    <div class="rail-block">
+      <div class="rail-h">Jetzt gerade</div>
+      <div class="rail-now">
+        <div id="rail-art" class="rail-art">♫</div>
+        <div class="rail-now-info">
+          <div id="rail-title" class="rail-title">–</div>
+          <div id="rail-artist" class="rail-artist muted"></div>
+        </div>
+      </div>
+    </div>
+    <div class="rail-block">
+      <div class="rail-h">Als Nächstes</div>
+      <div id="rail-queue" class="rail-queue"></div>
+    </div>
+  </aside>
 </div>
 
 <!-- MOBILE BOTTOM NAV (<= 720px) — sidebar hides, these 4 stay -->

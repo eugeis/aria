@@ -85,6 +85,7 @@ async function playCurrent() {
     $("player-title").textContent = cur.title;
     $("player-artist").textContent = cur.artist || "";
     $("pp-play").textContent = "❚❚";
+    renderRail();
     // Album art for the current track (embedded or enrichment-embedded)
     const artBox = $("player-art");
     if (cur.has_art) {
@@ -119,6 +120,44 @@ async function playTrackId(id) {
   const t = library?.collections?.flatMap((c) => c.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks)))?.find((x) => x.id === id);
   const list = t ? [t] : [{ id, title: "?", artist: "" }];
   await playContext(list, 0);
+}
+
+// The desktop right rail (ADR 0168 `layout: app` window model): "Now
+// Playing" + the next tracks of the current playback context. Updated from
+// playCurrent(); hidden below 1280px (the mobile full player covers it).
+function renderRail() {
+  const cur = player.context?.[player.idx];
+  if (!cur) return;
+  $("rail-title").textContent = cur.title;
+  $("rail-artist").textContent = [cur.artist, cur.album].filter(Boolean).join(" – ");
+  const art = $("rail-art");
+  if (cur.has_art) {
+    const img = new Image();
+    img.onload = () => { art.innerHTML = ""; art.classList.add("has-art"); art.appendChild(img); };
+    img.onerror = () => { art.classList.remove("has-art"); art.textContent = "♫"; };
+    img.src = `/art/${cur.id}`;
+  } else {
+    art.classList.remove("has-art");
+    art.textContent = "♫";
+  }
+  const start = player.idx + 1;
+  const next = player.context.slice(start, start + 12);
+  $("rail-queue").innerHTML = next.length
+    ? next
+        .map(
+          (t, i) =>
+            `<div class="rq-row" data-idx="${start + i}" title="${esc(t.title)}${t.artist ? " – " + esc(t.artist) : ""}">` +
+            `<span class="rq-n">${i + 1}</span>` +
+            `<span class="rq-t"><b>${esc(t.title)}</b>${t.artist ? ` <span>· ${esc(t.artist)}</span>` : ""}</span></div>`
+        )
+        .join("")
+    : `<div class="rail-empty">Ende der Wiedergabeliste</div>`;
+  document.querySelectorAll("#rail-queue .rq-row").forEach((r) =>
+    r.addEventListener("click", () => {
+      player.idx = Number(r.dataset.idx);
+      playCurrent();
+    })
+  );
 }
 
 function playerNext() {

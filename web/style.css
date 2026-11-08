@@ -835,6 +835,60 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
 /* ══ new shell (v2): sidebar + topbar + card views ══════════════════════ */
 .app { display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 100vh; }
 
+/* right rail (ADR 0168 `layout: app` window model): the persistent
+   "Now Playing" + queue column on wide desktops — hidden below 1280px
+   (the mobile full player / compact bar already cover the player state) */
+.rail { display: none; }
+@media (min-width: 1280px) {
+  .app { grid-template-columns: 216px minmax(0, 1fr) 340px; }
+  .rail {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    border-left: 1px solid var(--line);
+    background: var(--panel);
+    padding: 18px 16px 96px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .rail-h {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .rail-now { display: flex; gap: 12px; align-items: center; }
+  .rail-art {
+    width: 72px; height: 72px; flex: none;
+    border-radius: 10px;
+    background: var(--panel2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; color: var(--muted);
+    overflow: hidden;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  }
+  .rail-art img { width: 100%; height: 100%; object-fit: cover; }
+  .rail-now-info { min-width: 0; }
+  .rail-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rail-artist { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .rail-queue { display: flex; flex-direction: column; gap: 2px; }
+  .rq-row {
+    display: flex; gap: 8px; align-items: center;
+    padding: 6px 8px; border-radius: 8px;
+    cursor: pointer; font-size: 13px;
+  }
+  .rq-row:hover { background: var(--panel2); }
+  .rq-n { color: var(--muted); font-size: 11px; width: 16px; flex: none; text-align: right; }
+  .rq-t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rq-t b { font-weight: 600; }
+  .rq-t span { color: var(--muted); }
+  .rail-empty { color: var(--muted); font-size: 12.5px; padding: 4px 8px; }
+}
+
 .sidebar {
   background: var(--panel);
   border-right: 1px solid var(--line);
