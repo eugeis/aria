@@ -755,6 +755,7 @@ document.querySelectorAll("#tool-tabs button[data-tool]").forEach((b) =>
 
 let drill = { mode: "folders", path: [] };   // path = ["Deutsch", "Geistliches"]
 let albumState = null;                        // {collection, artist, album} | null
+let albumStickyObs = null;                    // IntersectionObserver for #al-sticky
 
 function allLibraryTracks() {
   return (
@@ -1082,6 +1083,7 @@ function openAlbum(artist, album) {
   const al = a?.albums.find((x) => x.name === album);
   if (!al) return;
   albumState = { artist, album };
+  $("al-sticky").classList.remove("stuck");
   $("home-hero").classList.add("hidden");
   $("home-rows").classList.add("hidden");
   $("library-drill").classList.add("hidden");
@@ -1108,6 +1110,23 @@ function openAlbum(artist, album) {
   b.title = "Zurück";
   b.addEventListener("click", back);
   $("album-hero").prepend(b);
+  // compact sticky toolbar while scrolling the track list (phone pattern)
+  $("al-sticky-title").textContent = `${artist} – ${album}`;
+  $("al-sticky-back").onclick = back;
+  const sp = $("al-sticky-play");
+  sp.dataset.act = "playall-album";
+  sp.dataset.artist = artist;
+  sp.dataset.album = album;
+  if (albumStickyObs) albumStickyObs.disconnect();
+  const topbarH = document.querySelector(".topbar")?.offsetHeight || 0;
+  albumStickyObs = new IntersectionObserver(
+    (entries) => {
+      const vis = entries[0]?.isIntersecting;
+      $("al-sticky").classList.toggle("stuck", !!albumState && !vis);
+    },
+    { rootMargin: `-${topbarH}px 0px 0px 0px` }
+  );
+  albumStickyObs.observe($("album-hero"));
 }
 
 function playIds(ids) {
@@ -1244,7 +1263,7 @@ function playAlbum(artist, album) {
 async function addTrackToPlaylist(id) {
   const t = albumTracksAll().find((x) => x.id === id);
   if (!t) return;
-  const sel = promptPlaylist("Titel zur Playlist hinzufügen:");
+  const sel = await promptPlaylist("Titel zur Playlist hinzufügen:");
   if (!sel) return;
   await addToPlaylist([{ kind: "track", track_id: id, title: t.title, artist: t.artist, album: t.album }], sel);
 }
@@ -1257,7 +1276,7 @@ function albumTracksAll() {
   );
 }
 
-function addAlbumToPlaylist(artist, album) {
+async function addAlbumToPlaylist(artist, album) {
   const items = albumTracks(artist, album).map((t) => ({
     kind: "track",
     track_id: t.id,
@@ -1265,21 +1284,34 @@ function addAlbumToPlaylist(artist, album) {
     artist: t.artist,
     album: t.album,
   }));
-  const sel = promptPlaylist(`Album „${album}“ zur Playlist hinzufügen:`);
+  const sel = await promptPlaylist(`Album „${album}“ zur Playlist hinzufügen:`);
   if (!sel) return;
   addToPlaylist(items, sel, () => toast(`${items.length} Titel zur Playlist hinzugefügt`));
 }
 
 function promptPlaylist(hint) {
-  if (!playlistsCache.length) {
-    toast("Erst eine Playlist erstellen (Tab Playlists)", true);
-    return null;
-  }
-  const names = playlistsCache.map((p, i) => `${i + 1}. ${p.name}`).join("\n");
-  const raw = prompt(`${hint}\n\n${names}\n\nNummer wählen:`);
-  const n = parseInt(raw, 10);
-  if (!n || !playlistsCache[n - 1]) return null;
-  return playlistsCache[n - 1].id;
+  return new Promise((resolve) => {
+    if (!playlistsCache.length) {
+      toast("Erst eine Playlist erstellen (Tab Playlists)", true);
+      return resolve(null);
+    }
+    $("pl-sheet-hint").textContent = hint;
+    $("pl-sheet-list").innerHTML = playlistsCache
+      .map(
+        (p) =>
+          `<button class="sheet-row" data-plid="${p.id}">${esc(p.name)}${p.is_mine ? "" : ` <span class="owner-chip">von ${esc(p.owner || "?")}</span>`}<span class="sheet-row-n muted">${(p.items || []).length}</span></button>`
+      )
+      .join("");
+    const done = (id) => {
+      $("pl-sheet").classList.add("hidden");
+      document.querySelectorAll("#pl-sheet-list .sheet-row").forEach((b) => b.removeEventListener("click", onRow));
+      resolve(id);
+    };
+    const onRow = (e) => done(Number(e.currentTarget.dataset.plid));
+    document.querySelectorAll("#pl-sheet-list .sheet-row").forEach((b) => b.addEventListener("click", onRow));
+    document.querySelectorAll("#pl-sheet [data-close]").forEach((b) => b.onclick = () => done(null));
+    $("pl-sheet").classList.remove("hidden");
+  });
 }
 
 // ── search ────────────────────────────────────────────────────────────────
@@ -2003,3 +2035,12 @@ $("enrich-list").addEventListener("change", (e) => {
   const n = enrichAlbums.filter((a) => a.selected && a.entry && a.entry.art_b64).length;
   $("enrich-apply").classList.toggle("hidden", n === 0);
 });
+
+// keep --topbar-h in sync so the sticky album toolbar pins below the topbar
+function syncTopbarH() {
+  const t = document.querySelector(".topbar");
+  document.documentElement.style.setProperty("--topbar-h", (t ? t.offsetHeight : 0) + "px");
+}
+window.addEventListener("resize", syncTopbarH);
+window.addEventListener("load", syncTopbarH);
+syncTopbarH();

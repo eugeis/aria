@@ -78,6 +78,11 @@
       </div>
       <div id="album-view" class="hidden">
         <div id="album-hero"></div>
+        <div id="al-sticky" class="al-sticky">
+          <button id="al-sticky-back" class="st-back" title="Zurück">←</button>
+          <div id="al-sticky-title" class="st-title"></div>
+          <button id="al-sticky-play" class="st-play" title="Album abspielen">▶</button>
+        </div>
         <div id="album-tracks" class="pl-items"></div>
       </div>
     </section>
@@ -286,6 +291,17 @@
     <span id="pp-time" class="muted">0:00 / 0:00</span>
   </div>
   <button id="pp-close" title="Player schließen" class="ghost">✕</button>
+</div>
+
+<div id="pl-sheet" class="sheet hidden">
+  <div class="sheet-backdrop" data-close></div>
+  <div class="sheet-panel">
+    <div class="sheet-head">
+      <span id="pl-sheet-hint">Zur Playlist hinzufügen</span>
+      <button class="ghost" data-close>✕</button>
+    </div>
+    <div id="pl-sheet-list" class="sheet-list"></div>
+  </div>
 </div>
 
 <div id="toast" class="toast hidden"></div>
