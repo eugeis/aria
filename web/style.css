@@ -1051,7 +1051,9 @@ main { display: contents; }
   .sidebar { display: none; }
   .view { padding: 12px 12px 84px; }
   .topbar { padding: 8px 12px; }
-  .searchbox .sb-modes, .searchbox select { display: none; }
+  .searchbox select { display: none; }
+  .searchbox .sb-modes { flex: none; }
+  .sb-modes button { padding: 6px 9px; font-size: 12px; }
   .row-cards { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
   .card-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
   #album-hero { flex-direction: column; align-items: flex-start; gap: 12px; }

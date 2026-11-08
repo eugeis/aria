@@ -348,14 +348,22 @@ async fn do_lookup(
             candidates.push(album[..pos].to_string());
         }
     }
+    // Collect the pools of ALL query forms (strict + full-text, per
+    // candidate) and let the scoring arbitrate — the first non-empty
+    // result can be the wrong one (a loose full-text hit on the artist
+    // name outranks the right album in Lucene's ordering).
     let mut releases: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut last_err = String::new();
-    'queries: for cand in &candidates {
+    for cand in &candidates {
         for query in [
             format!(r#"release:"{cand}" AND artist:"{artist}""#),
             format!("\"{cand}\" {artist}"),
         ] {
-            let url = format!("{MB_BASE}/release/?query={}&fmt=json&limit=5", urlencoded(&query));
+            let url = format!(
+                "{MB_BASE}/release/?query={}&fmt=json&limit=5",
+                urlencoded(&query)
+            );
             for _attempt in 0..2 {
                 enrich.pace().await;
                 match enrich.client.get(&url).send().await {
@@ -366,11 +374,17 @@ async fn do_lookup(
                             .ok()
                             .and_then(|v| v.get("releases").and_then(|r| r.as_array()).cloned())
                             .unwrap_or_default();
-                        if !got.is_empty() {
-                            releases = got;
-                            break 'queries;
+                        for rel in got {
+                            let id = rel
+                                .get("id")
+                                .and_then(|i| i.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if seen.insert(id) {
+                                releases.push(rel);
+                            }
                         }
-                        break; // empty result — next query form
+                        break;
                     }
                     Ok(r) => {
                         last_err = format!("MusicBrainz HTTP {}", r.status());
@@ -387,8 +401,12 @@ async fn do_lookup(
             }
         }
     }
-    if releases.is_empty() && !last_err.is_empty() {
-        entry.note = last_err;
+    if releases.is_empty() {
+        entry.note = if last_err.is_empty() {
+            "kein MusicBrainz-Treffer".into()
+        } else {
+            last_err
+        };
         return entry;
     }
 
