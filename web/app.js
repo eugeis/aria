@@ -438,7 +438,7 @@ async function loadRecent() {
     .map(
       (e) => `
     <div class="pl-row">
-      <span class="t-no">${e.kind === "download" ? "⬇" : "▶"}</span>
+      <span class="t-no">${e.kind === "download" ? "⬇" : ""}</span>
       <span class="t-title">${esc(e.title)}</span>
       <span class="t-meta muted">${esc(e.artist || "")} · ${esc(e.at || "")}</span>
       <span class="t-dur"></span>
@@ -620,9 +620,10 @@ async function boot() {
   const who = u.name || u.user || "?";
   // The tenant dim is the app's GROUP (the household) — one for a long
   // time; the user dim is personal (playlists, recent).
-  $("user-badge").textContent = u.tenant ? `${who} · ${u.tenant}` : who;
-  $("user-badge").title = `Angemeldet als ${u.user} (${u.role || "?"}) — Gruppe ${u.tenant || "?"}`;
-  $("user-badge").className = "badge ok";
+  $("acc-name").textContent = who;
+  $("acc-name").title = `Angemeldet als ${u.user} (${u.role || "?"}) — Gruppe ${u.tenant || "?"}`;
+  $("acc-sub").textContent = [u.role || "", u.tenant ? `Gruppe ${u.tenant}` : ""].filter(Boolean).join(" · ");
+  $("acc-avatar").textContent = (who || "?").trim().charAt(0).toUpperCase();
   $("logout").classList.remove("hidden");
 
   loadCollections();
@@ -677,6 +678,7 @@ function showView(name) {
   document.querySelectorAll(".view").forEach((x) => x.classList.toggle("active", x.id === `view-${name}`));
   if (name === "search") {
     if (!searchHits.length) doSearch();
+    $("search-q").focus();
   } else if (name === "playlists") {
     loadRecent();
   } else if (name === "tools") {
@@ -918,6 +920,7 @@ function renderDrill() {
   const musik = library.collections.find((c) => c.name === "musik");
   const parts = [{ label: "Medien", act: () => stopDrill() }];
   if (drill.mode === "artists") parts.push({ label: "Künstler", act: () => openDrill("artists", []) });
+  else if (drill.mode === "genre") parts.push({ label: drill.path[0], act: () => stopDrill() });
   else drill.path.forEach((p, i) =>
     parts.push({ label: p, act: () => openDrill("folders", drill.path.slice(0, i + 1)) })
   );
@@ -928,10 +931,36 @@ function renderDrill() {
     b.addEventListener("click", () => parts[Number(b.dataset.crumb)].act())
   );
 
-  const cards = drillCards(musik);
+  const cards = drill.mode === "genre" ? genreCards(musik, drill.path[0]) : drillCards(musik);
   grid.innerHTML = cards.length
     ? cards.join("")
-    : `<p class="muted">Nichts hier — zurück zum Start.</p>`;
+    : `<p class="muted">Keine Alben in diesem Genre — zurück zum Start.</p>`;
+}
+
+// Albums across all languages whose second folder level is this genre.
+function genreCards(musik, genre) {
+  if (!musik) return [];
+  const tracks = musik.artists.flatMap((a) => a.albums.flatMap((al) => al.tracks));
+  const seen = new Map();
+  for (const t of tracks) {
+    let segs = (t.rel_path || "").split("/").filter(Boolean);
+    if (segs.length > 1 && segs[0] === "musik") segs = segs.slice(1);
+    if (segs[1] !== genre) continue;
+    const key = `${t.artist}¦${t.album}`;
+    if (!seen.has(key)) seen.set(key, { artist: t.artist, album: t.album, lang: segs[0], tracks: [] });
+    seen.get(key).tracks.push(t);
+  }
+  return [...seen.values()].sort((a, b) => (a.lang + a.artist).localeCompare(b.lang + b.artist, "de")).map((al) =>
+    cardHtml({
+      name: al.album || "(ohne Album)",
+      sub: `${al.lang} · ${al.artist}`,
+      art: (al.tracks.find((t) => t.has_art) || {}).has_art
+        ? artImgHtml(al.album, [`/art/${al.tracks.find((t) => t.has_art).id}`])
+        : null,
+      play: al.tracks.map((t) => t.id).join(","),
+      data: `album:${encodeURIComponent(al.artist)}¦${encodeURIComponent(al.album)}`,
+    })
+  );
 }
 
 function drillCards(musik) {
@@ -1055,13 +1084,20 @@ function playIds(ids) {
 $("home-rows").addEventListener("click", (e) => handleCardClick(e));
 $("drill-grid").addEventListener("click", (e) => handleCardClick(e));
 
+function openGenre(name) {
+  drill = { mode: "genre", path: [name] };
+  albumState = null;
+  $("home-hero").classList.add("hidden");
+  $("home-rows").classList.add("hidden");
+  $("album-view").classList.add("hidden");
+  $("library-drill").classList.remove("hidden");
+  renderDrill();
+}
+
 function handleCardClick(e) {
   const chip = e.target.closest("[data-chip-genre]");
   if (chip) {
-    const name = decodeURIComponent(chip.dataset.chipGenre);
-    const musik = library.collections.find((c) => c.name === "musik");
-    const ids = (musik ? folderLevels(musik, 2) : []).filter((g) => g.name === name)[0]?.ids || [];
-    if (ids.length) playIds(ids);
+    openGenre(decodeURIComponent(chip.dataset.chipGenre));
     return;
   }
   const playBtn = e.target.closest("[data-play-ids]");
@@ -1223,7 +1259,10 @@ $("search-mode").addEventListener("click", (e) => {
 
 async function doSearch() {
   const q = $("search-q").value.trim();
-  if (!q) return;
+  if (!q) {
+    $("search-results").innerHTML = `<p class="muted">Tippe oben in die Suchleiste — Titel, Künstler oder Album, z. B. „Oceans“.</p>`;
+    return;
+  }
   const box = $("search-results");
   box.innerHTML = `<p class="muted">Suche läuft …</p>`;
   try {
