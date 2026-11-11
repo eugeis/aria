@@ -71,6 +71,14 @@ app:
     # caches its last 2xx answer, so an offline reload passes
     # the session check and the app opens without a server.
     session: /dl/me
+  # ADR 0173: public (auth-free) pages on this surface — the
+  # self-contained privacy policy the shared Google OAuth client
+  # (bible + aria) points at, required to publish the client out
+  # of Testing mode. Served by the app server at /privacy.
+  public_pages:
+    - path: /privacy
+      title: Datenschutzerklärung
+      body_file: privacy.md
   # Native apps (Tauri): out/native is a Tauri v2 shell whose window drives
   # this very server (the static SPA + REST API) on loopback. Desktop
   # targets fully wired; android/ios are documented scaffolds (in-process
