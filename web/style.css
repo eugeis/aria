@@ -56,6 +56,65 @@ code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-siz
   border-radius: 8px;
   padding: 10px 12px;
 }
+/* SSO + passkey login (bible layout): Google primary, passkey row,
+   password collapsed in a <details> */
+.google-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 18px;
+  padding: 11px 12px;
+  background: #fff;
+  color: #1f1f1f;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.google-btn:hover { background: #f2f2f2; }
+.google-btn .g-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px; height: 18px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #4285f4;
+}
+.login-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.login-or::before, .login-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.login-row { display: flex; gap: 8px; }
+.login-row input { flex: 1; margin: 0; }
+.pk-btn {
+  flex: none;
+  width: 46px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 16px;
+  cursor: pointer;
+}
+.pk-btn:hover { border-color: var(--accent); }
+.login-card details { margin-top: 12px; text-align: left; }
+.login-card details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 6px 2px;
+  user-select: none;
+}
+.login-card details[open] summary { margin-bottom: 8px; }
+.login-card details form { margin-top: 0; }
 
 /* header + tabs */
 header {
@@ -1252,8 +1311,18 @@ main { display: contents; }
   text-overflow: ellipsis;
 }
 .acc-sub { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.side-account #logout { padding: 6px 8px; font-size: 14px; }
+.acc-actions { display: flex; gap: 2px; flex: none; }
+.acc-actions button { padding: 6px 7px; font-size: 13px; }
 .acc-yt { display: block; text-align: center; margin-top: 4px; }
+/* password-change sheet form */
+.pw-form { display: flex; flex-direction: column; gap: 10px; }
+.pw-form input {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
 
 /* offline-mode banner (PWA, ADR 0165 v2) */
 .offline-banner {

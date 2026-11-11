@@ -16,11 +16,25 @@
     <img src="/icon.svg" alt="" width="48" height="48">
     <h1>Aria</h1>
     <p class="muted">Bitte anmelden.</p>
-    <form id="login-form">
-      <input id="login-user" type="text" placeholder="Benutzername" autocomplete="username" required>
-      <input id="login-pass" type="password" placeholder="Passwort" autocomplete="current-password" required>
-      <button type="submit">Anmelden</button>
-    </form>
+    <!-- SSO primary (bible login layout): a full navigation to the brain's
+         /auth/google/login — the browser then round-trips Google and comes
+         back with the HttpOnly mosaic_token cookie (the adapter reads it
+         directly, no JS bridge needed for /dl/*). -->
+    <button id="login-google" class="google-btn" type="button">
+      <span class="g-ic" aria-hidden="true">G</span> Mit Google anmelden
+    </button>
+    <div class="login-or"><span>oder</span></div>
+    <div class="login-row">
+      <input id="login-user" type="text" placeholder="Benutzername" autocomplete="username">
+      <button id="login-passkey" type="button" class="pk-btn" title="Mit Passkey anmelden (Fingerabdruck / Gesichtserkennung)">🔑</button>
+    </div>
+    <details id="login-pw">
+      <summary>Passwort</summary>
+      <form id="login-form">
+        <input id="login-pass" type="password" placeholder="Passwort" autocomplete="current-password" required>
+        <button type="submit">Anmelden</button>
+      </form>
+    </details>
     <p id="login-error" class="error"></p>
   </div>
 </div>
@@ -42,7 +56,11 @@
           <div class="acc-name" id="acc-name">…</div>
           <div class="acc-sub muted" id="acc-sub"></div>
         </div>
-        <button id="logout" class="ghost hidden" title="Abmelden">⏻</button>
+        <div class="acc-actions">
+          <button id="acc-passkey" class="ghost hidden" title="Passkey registrieren (Fingerabdruck / Gesichtserkennung)">🔑</button>
+          <button id="acc-pw" class="ghost hidden" title="Passwort ändern">✎</button>
+          <button id="logout" class="ghost hidden" title="Abmelden">⏻</button>
+        </div>
       </div>
       <span id="cookie-badge" class="badge muted acc-yt">YT-Sitzung: ?</span>
     </div>
@@ -322,6 +340,24 @@
       <button class="ghost" data-close>✕</button>
     </div>
     <div id="pl-sheet-list" class="sheet-list"></div>
+  </div>
+</div>
+
+<!-- Passwort ändern (self-service; the brain's PUT /api/auth/me/password).
+     Local accounts only — an SSO principal has no local credential. -->
+<div id="pw-sheet" class="sheet hidden">
+  <div class="sheet-backdrop" data-close></div>
+  <div class="sheet-panel">
+    <div class="sheet-head">
+      <span>Passwort ändern</span>
+      <button class="ghost" data-close>✕</button>
+    </div>
+    <form id="pw-form" class="pw-form">
+      <input id="pw-old" type="password" placeholder="Aktuelles Passwort" autocomplete="current-password" required>
+      <input id="pw-new" type="password" placeholder="Neues Passwort (mind. 8 Zeichen)" autocomplete="new-password" minlength="8" required>
+      <button type="submit">Speichern</button>
+    </form>
+    <p id="pw-error" class="error"></p>
   </div>
 </div>
 

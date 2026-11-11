@@ -143,6 +143,14 @@ app:
     # generated MCP client — never inlined).
     MOAIC_MCP_BIBLE_URL: "https://bible.eisler-systems.de/mcp"
     MOAIC_MCP_BIBLE_AUTH: { secret: true }
+    # Google SSO (the "Mit Google anmelden" button on the login screen): the
+    # OAuth client's credentials. The SAME client the bible app uses — its
+    # Google Console "authorized redirect URI" list must additionally carry
+    # https://aria.eisler-systems.de/auth/google/callback. Until the k8s
+    # secrets exist the SSO route fails soft with a clear error; the local
+    # accounts + passkeys are unaffected.
+    MOAIC_GOOGLE_CLIENT_ID: { secret: true }
+    MOAIC_GOOGLE_CLIENT_SECRET: { secret: true }
   mcp:
     servers:
       - name: bible
@@ -248,6 +256,42 @@ identity:
       # Tenant-scoped (no user dim — it is not a person): the sidecar's
       # workflow runs see the whole tenant's knowledge, ADR 0151-verified.
       realm: { tenant: aria }
+  # Google SSO (in addition to the local accounts + passkeys): the login
+  # screen's "Mit Google anmelden" button links to /auth/google/login. Each
+  # Google subject gets a DYNAMIC per-person realm (realm_from: user -> the
+  # email claim) so their playlists / recent isolate per individual — the
+  # static catch-all rule below stamps the household tenant dim (aria's
+  # realms are 2-dimensional; realm_from alone would leave tenant unset).
+  # The operator's emails map to admin, everyone else to editor (a household
+  # member — full playback, own playlists, no ops). The adapter sidecar
+  # accepts the same mosaic_token cookie (ID_COOKIE), so an SSO session
+  # drives /dl/* with no client-side bridge.
+  sso:
+    - provider: google
+      client_id_env: MOAIC_GOOGLE_CLIENT_ID
+      client_secret_env: MOAIC_GOOGLE_CLIENT_SECRET
+      scopes: [openid, email, profile]
+      realm_from: { user: email }
+      role_map:
+        default: editor
+        rules:
+          - role: admin
+            all: [{ claim: email, in: [eugen.eisler@siemens.com, eoeisler@gmail.com] }]
+            realm: { tenant: aria }
+          - role: editor
+            all: []
+            realm: { tenant: aria }
+  # ADR 0169: passkeys (WebAuthn) — a phishing-resistant, passwordless
+  # sign-in alongside the password + Google SSO. rp_id = the public origin
+  # host (a passkey is bound to it). The login screen offers "🔑" next to
+  # the username; the account block offers registration. v1 binds to the
+  # IAM users (admin/anna) — SSO principals have no local record yet.
+  passkeys:
+    enabled: true
+    rp_id: aria.eisler-systems.de
+    rp_name: Aria
+    origins:
+      - https://aria.eisler-systems.de
 
 # ---- the two knowledge collections ----------------------------------------
 vector_dbs:
