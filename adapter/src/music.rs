@@ -341,20 +341,10 @@ async fn handle_play(
     let token = state.registry.issue("web", src);
     let url = format!("{}/stream/{}", state.cfg.base_url(), token);
     let art = state.art_url(body.id);
-    // The user-scope recent list (per the caller's verified realm claim).
-    if let Some(u) = crate::web::authorized(&state.cfg, &headers) {
-        state.recent.record(
-            &u.user_key(),
-            crate::web::RecentItem {
-                title: title.clone(),
-                artist: artist.clone(),
-                kind: "play".into(),
-                track_id: Some(body.id),
-                path: None,
-                at: crate::web::fmt_time(std::time::SystemTime::now()),
-            },
-        );
-    }
+    // Recents are NOT recorded here: the SPA confirms a track only once it
+    // has actually been listened to (30 s or half the duration — spotifast's
+    // play-counting rule, sync/spotifast.md L5) via POST /dl/recent/play.
+    // A 10-second browse no longer pollutes the recent list.
     Json(serde_json::json!({
         "ok": true,
         "url": url,
@@ -363,6 +353,47 @@ async fn handle_play(
         "art": art,
     }))
     .into_response()
+}
+
+#[derive(Deserialize)]
+struct RecentPlayBody {
+    id: u64,
+}
+
+/// POST /dl/recent/play — the duration-aware recent confirm (spotifast L5):
+/// the SPA calls this once a track has genuinely been heard (30 s or half
+/// its duration), online or offline playback alike.
+async fn handle_recent_play(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<RecentPlayBody>,
+) -> Response {
+    let Some(u) = crate::web::authorized(&state.cfg, &headers) else {
+        return crate::web::denied();
+    };
+    let (title, artist) = {
+        let lib = state.library.read().unwrap();
+        let Some(track) = lib.get(body.id) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"ok": false, "error": "track not found"})),
+            )
+                .into_response();
+        };
+        (track.title.clone(), track.artist.clone())
+    };
+    state.recent.record(
+        &u.user_key(),
+        crate::web::RecentItem {
+            title,
+            artist,
+            kind: "play".into(),
+            track_id: Some(body.id),
+            path: None,
+            at: crate::web::fmt_time(std::time::SystemTime::now()),
+        },
+    );
+    Json(serde_json::json!({"ok": true})).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -989,6 +1020,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dl/library", get(handle_library))
         .route("/dl/library/search", get(handle_library_search))
         .route("/dl/play", post(handle_play))
+        .route("/dl/recent/play", post(handle_recent_play))
         .route(
             "/dl/playlists",
             get(handle_playlists_get).post(handle_playlists_create),

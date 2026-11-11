@@ -396,6 +396,10 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
   font-size: 14px;
 }
 .player-controls button:hover { filter: brightness(1.25); }
+/* shuffle / repeat (spotifast transport states): dim when off, the accent
+   when active — 🔁 = repeat-context, 🔂 = repeat-track */
+.pp-transport { color: var(--muted); font-size: 13px; }
+.pp-transport.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel2)); }
 .player-progress { flex: 1; display: flex; align-items: center; gap: 10px; }
 .pp-bar { flex: 1; height: 6px; background: var(--panel2); border-radius: 3px; cursor: pointer; position: relative; }
 .pp-fill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; }

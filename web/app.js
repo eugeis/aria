@@ -14,11 +14,61 @@ let searchHits = [];         // current result rows (playable or youtube)
 let queueTimer = null;
 
 // ── player ────────────────────────────────────────────────────────────────
+// Transport semantics follow spotifast (sync/spotifast.md L1): repeat is
+// off | context | track; picking another song BY HAND auto-drops
+// repeat-track → context; "previous" restarts the track when ≥ 3 s in;
+// shuffle reorders the context (current first). The state persists.
 const player = {
   audio: new Audio(),
   context: [],   // [{id, title, artist, art?}] — the "now playing" list
   idx: -1,
+  shuffle: false,
+  repeat: "off",        // off | context | track
+  order: null,          // shuffled index order (current first) when shuffling
+  confirmSent: false,   // duration-aware recent confirm sent for this track
+  msMeta: null,         // last Media Session metadata
 };
+const PLAYER_STORE = "aria.player";
+function loadPlayerPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PLAYER_STORE) || "{}");
+    player.shuffle = !!p.shuffle;
+    player.repeat = ["off", "context", "track"].includes(p.repeat) ? p.repeat : "off";
+  } catch (e) {}
+}
+function savePlayerPrefs() {
+  try { localStorage.setItem(PLAYER_STORE, JSON.stringify({ shuffle: player.shuffle, repeat: player.repeat })); } catch (e) {}
+}
+function shuffleOrder(fromIdx) {
+  const rest = [];
+  for (let i = 0; i < player.context.length; i++) if (i !== fromIdx) rest.push(i);
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [rest[i], rest[j]] = [rest[j], rest[i]];
+  }
+  return [fromIdx, ...rest];
+}
+function syncTransportButtons() {
+  const s = $("pp-shuffle");
+  const r = $("pp-repeat");
+  if (!s || !r) return;
+  s.classList.toggle("on", player.shuffle);
+  s.title = player.shuffle ? "Zufall: an (aus)" : "Zufall abspielen";
+  r.classList.toggle("on", player.repeat !== "off");
+  r.textContent = player.repeat === "track" ? "🔂" : "🔁";
+  r.title =
+    player.repeat === "off" ? "Wiederholen: aus" :
+    player.repeat === "context" ? "Wiederholen: Liste (nächste: Titel)" :
+    "Wiederholen: Titel (nächste: Liste)";
+}
+function leaveRepeatOne() {
+  if (player.repeat === "track") {
+    player.repeat = "context";
+    savePlayerPrefs();
+    syncTransportButtons();
+  }
+}
+loadPlayerPrefs();
 
 function fmtDur(secs) {
   if (secs == null) return "–";
@@ -70,10 +120,17 @@ function playlistSelectHtml(selected = "") {
 
 // ── player ────────────────────────────────────────────────────────────────
 
-async function playContext(list, idx) {
+// manual defaults true: every explicit start (album, playlist, a single
+// track, a search row) is "picking a song by hand" and drops repeat-track →
+// context (spotifast's rule). Only the automatic end-of-track advance uses
+// playerNext(false).
+async function playContext(list, idx, manual = true) {
   if (!list.length) return;
+  if (manual) leaveRepeatOne();
   player.context = list;
   player.idx = idx;
+  if (player.shuffle) player.order = shuffleOrder(idx);
+  else player.order = null;
   await playCurrent();
 }
 
@@ -81,10 +138,12 @@ async function playCurrent() {
   const cur = player.context[player.idx];
   if (!cur) return;
   $("player").classList.remove("hidden");
+  player.confirmSent = false;
   try {
     $("player-title").textContent = cur.title;
     $("player-artist").textContent = cur.artist || "";
     $("pp-play").textContent = "❚❚";
+    msTrack(cur);
     renderRail();
     // Album art for the current track (embedded or enrichment-embedded)
     const artBox = $("player-art");
@@ -154,34 +213,138 @@ function renderRail() {
     : `<div class="rail-empty">Ende der Wiedergabeliste</div>`;
   document.querySelectorAll("#rail-queue .rq-row").forEach((r) =>
     r.addEventListener("click", () => {
+      leaveRepeatOne(); // a hand-picked jump within the context
       player.idx = Number(r.dataset.idx);
       playCurrent();
     })
   );
 }
 
-function playerNext() {
-  if (player.idx < player.context.length - 1) {
-    player.idx += 1;
-    playCurrent();
-  }
+// Media Session (ADR 0172 — the lens emits /media-session.js; the 1/s
+// position throttle lives in the bridge, not here).
+function msUpdate() {
+  if (!window.MosaicMediaSession || !player.msMeta) return;
+  MosaicMediaSession.update({ ...player.msMeta, duration: player.audio.duration || 0 });
 }
-function playerPrev() {
-  if (player.idx > 0) {
-    player.idx -= 1;
-    playCurrent();
-  } else {
-    player.audio.currentTime = 0;
-  }
+function msTrack(cur) {
+  player.msMeta = {
+    title: cur.title,
+    artist: cur.artist || "",
+    album: cur.album || "",
+    artwork: cur.has_art ? `/art/${cur.id}` : undefined,
+  };
+  if (!window.MosaicMediaSession) return;
+  msUpdate();
+  MosaicMediaSession.playing(0);
 }
 
-player.audio.addEventListener("play", () => ($("pp-play").textContent = "❚❚"));
-player.audio.addEventListener("pause", () => ($("pp-play").textContent = "▶"));
-player.audio.addEventListener("ended", playerNext);
+function stopAtEnd() {
+  player.audio.pause();
+  player.audio.currentTime = 0;
+  if (window.MosaicMediaSession) MosaicMediaSession.stopped();
+}
+
+// manual = the user (or the OS transport) picked the direction; a manual
+// song change drops repeat-track → context (spotifast's rule).
+function playerNext(manual = false) {
+  const n = player.context.length;
+  if (!n) return;
+  if (manual) leaveRepeatOne();
+  if (player.repeat === "track" && !manual) {
+    playCurrent(); // repeat the current track
+    return;
+  }
+  if (player.order) {
+    const p = player.order.indexOf(player.idx);
+    if (p >= 0 && p < player.order.length - 1) {
+      player.idx = player.order[p + 1];
+      playCurrent();
+      return;
+    }
+    if (player.repeat === "context") {
+      player.order = shuffleOrder(player.idx);
+      player.idx = player.order[0];
+      playCurrent();
+      return;
+    }
+    stopAtEnd();
+    return;
+  }
+  if (player.idx < n - 1) {
+    player.idx += 1;
+    playCurrent();
+    return;
+  }
+  if (player.repeat === "context") {
+    player.idx = 0;
+    playCurrent();
+    return;
+  }
+  stopAtEnd();
+}
+
+function playerPrev() {
+  const a = player.audio;
+  // Restart when ≥ 3 s in (spotifast's RESTART_BEFORE_PREVIOUS), or at the
+  // very first track of the context.
+  if (a.currentTime >= 3 || player.idx === 0) {
+    a.currentTime = 0;
+    if (a.paused) a.play();
+    return;
+  }
+  if (player.order) {
+    const p = player.order.indexOf(player.idx);
+    if (p > 0) {
+      player.idx = player.order[p - 1];
+      playCurrent();
+      return;
+    }
+  } else if (player.idx > 0) {
+    player.idx -= 1;
+    playCurrent();
+    return;
+  }
+  a.currentTime = 0;
+}
+
+$("pp-shuffle").addEventListener("click", () => {
+  player.shuffle = !player.shuffle;
+  player.order = player.shuffle
+    ? shuffleOrder(Math.max(player.idx, 0))
+    : null;
+  savePlayerPrefs();
+  syncTransportButtons();
+});
+$("pp-repeat").addEventListener("click", () => {
+  player.repeat =
+    player.repeat === "off" ? "context" : player.repeat === "context" ? "track" : "off";
+  savePlayerPrefs();
+  syncTransportButtons();
+});
+syncTransportButtons();
+
+player.audio.addEventListener("play", () => {
+  $("pp-play").textContent = "❚❚";
+  if (window.MosaicMediaSession) MosaicMediaSession.playing(player.audio.currentTime);
+});
+player.audio.addEventListener("pause", () => {
+  $("pp-play").textContent = "▶";
+  if (window.MosaicMediaSession) MosaicMediaSession.paused(player.audio.currentTime);
+});
+player.audio.addEventListener("ended", () => playerNext(false));
+player.audio.addEventListener("loadedmetadata", msUpdate);
 player.audio.addEventListener("timeupdate", () => {
   const d = player.audio.duration || 0;
   $("pp-fill").style.width = d ? `${(100 * player.audio.currentTime) / d}%` : "0%";
   $("pp-time").textContent = `${fmtDur(player.audio.currentTime)} / ${fmtDur(d)}`;
+  if (window.MosaicMediaSession) MosaicMediaSession.tick(player.audio.currentTime);
+  // Duration-aware recent confirm (spotifast L5): a play counts once it has
+  // been heard for 30 s or half the track — not at play-start.
+  const cur = player.context[player.idx];
+  if (cur && !player.confirmSent && d > 0 && player.audio.currentTime >= Math.min(30, d / 2)) {
+    player.confirmSent = true;
+    api("/dl/recent/play", { method: "POST", body: JSON.stringify({ id: cur.id }) }).catch(() => {});
+  }
 });
 $("pp-bar").addEventListener("click", (e) => {
   const r = $("pp-bar").getBoundingClientRect();
@@ -191,8 +354,22 @@ $("pp-bar").addEventListener("click", (e) => {
 $("pp-play").addEventListener("click", () => {
   if (player.audio.paused) player.audio.play(); else player.audio.pause();
 });
-$("pp-next").addEventListener("click", playerNext);
+$("pp-next").addEventListener("click", () => playerNext(true));
 $("pp-prev").addEventListener("click", playerPrev);
+// The OS transport (media keys, lock screen, Android notification) flows
+// back through the ADR 0172 bridge — a next from the OS is a manual change.
+if (window.MosaicMediaSession) {
+  MosaicMediaSession.on({
+    play: () => player.audio.play(),
+    pause: () => player.audio.pause(),
+    nexttrack: () => playerNext(true),
+    previoustrack: () => playerPrev(),
+    seekto: (t) => {
+      if (isFinite(player.audio.duration) && player.audio.duration > 0) player.audio.currentTime = t;
+    },
+    stop: () => player.audio.pause(),
+  });
+}
 // Phones: tap the title / expand button for the full-screen player.
 $("pp-expand").addEventListener("click", (e) => {
   e.stopPropagation();
@@ -202,6 +379,7 @@ $("player-info").addEventListener("click", () => $("player").classList.toggle("f
 $("pp-close").addEventListener("click", () => {
   player.audio.pause();
   player.audio.removeAttribute("src");
+  if (window.MosaicMediaSession) MosaicMediaSession.stopped();
   $("player").classList.remove("full");
   $("player").classList.add("hidden");
 });
@@ -1755,6 +1933,10 @@ $("queue-clear").addEventListener("click", async () => {
 });
 
 function refreshQueueNow() {
+  // Power budget (spotifast L7): a hidden tab does no network polling — the
+  // one background timer of the app scales with visibility, and catches up
+  // immediately when it becomes visible again.
+  if (document.hidden) return;
   api("/dl/queue")
     .then((q) => {
       collections = q.collections || collections;
@@ -1766,6 +1948,9 @@ function refreshQueueNow() {
 function startQueuePolling() {
   if (queueTimer) return;
   queueTimer = setInterval(refreshQueueNow, 2500);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshQueueNow();
+  });
 }
 
 // ── youtube cookies ───────────────────────────────────────────────────────
