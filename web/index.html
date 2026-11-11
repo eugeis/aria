@@ -5,39 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Aria — Musik & Downloads</title>
   <link rel="stylesheet" href="/style.css">
+  <!-- ADR 0174: the declared login surface (emitted by the web lens) — the
+       shared sign-in card (Google SSO / passkey / password). -->
+  <link rel="stylesheet" href="/login.css">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <meta name="theme-color" content="#101418">
 </head>
 <body>
 
-<div id="login" class="login hidden">
-  <div class="login-card">
-    <img src="/icon.svg" alt="" width="48" height="48">
-    <h1>Aria</h1>
-    <p class="muted">Bitte anmelden.</p>
-    <!-- SSO primary (bible login layout): a full navigation to the brain's
-         /auth/google/login — the browser then round-trips Google and comes
-         back with the HttpOnly mosaic_token cookie (the adapter reads it
-         directly, no JS bridge needed for /dl/*). -->
-    <button id="login-google" class="google-btn" type="button">
-      <span class="g-ic" aria-hidden="true">G</span> Mit Google anmelden
-    </button>
-    <div class="login-or"><span>oder</span></div>
-    <div class="login-row">
-      <input id="login-user" type="text" placeholder="Benutzername" autocomplete="username">
-      <button id="login-passkey" type="button" class="pk-btn" title="Mit Passkey anmelden (Fingerabdruck / Gesichtserkennung)">🔑</button>
-    </div>
-    <details id="login-pw">
-      <summary>Passwort</summary>
-      <form id="login-form">
-        <input id="login-pass" type="password" placeholder="Passwort" autocomplete="current-password" required>
-        <button type="submit">Anmelden</button>
-      </form>
-    </details>
-    <p id="login-error" class="error"></p>
-  </div>
-</div>
+<!-- ADR 0174: the mount container for the MosaicLogin part (web/login.js,
+     emitted by the web lens — the same sign-in card the bible app uses:
+     Google SSO primary, the passkey row, the collapsed password). The card
+     markup/CSS/JS live in the part, not here. -->
+<div id="login"></div>
 
 <div class="app">
   <!-- SIDEBAR (desktop / tablet) -->
@@ -365,6 +346,7 @@
 <script src="/offline.js"></script>
 <script src="/media-session.js"></script>
 <script src="/pwa.js" defer></script>
+<script src="/login.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

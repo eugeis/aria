@@ -94,20 +94,17 @@ function toast(msg, isError = false) {
   toast._t = setTimeout(() => t.classList.add("hidden"), 4000);
 }
 
-// One uniform session: the brain's JWT lives in localStorage and rides as
-// Bearer on every call (brain AND adapter both accept it). The HttpOnly
-// mosaic_token cookie (SSO) is the boot carrier — the adapter reads it
-// directly, and the brain's /api/auth/me echoes the token back into its body
-// (the cookie bridge) so a pure-SSO session gains a stored token at boot.
-const TOKEN_KEY = "ariatoken";
-function getToken() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
-function storeToken(t) { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
-
+// One uniform session: the MosaicLogin part (ADR 0174, /login.js — emitted
+// by the web lens, the same card the bible app uses) owns the brain's JWT:
+// localStorage "mosaic_token" + the cookie bridge (the HttpOnly mosaic_token
+// cookie from SSO rides same-origin fetches; /api/auth/me echoes it into a
+// stored Bearer; the adapter reads the cookie directly). Every api() call
+// carries that token.
 async function api(path, opts = {}) {
   // Stringified JSON bodies are still JSON — the server must see the
   // Content-Type or the axum Json extractor answers 415. Caller headers win.
   const headers = { ...(opts.headers || {}) };
-  const tok = getToken();
+  const tok = MosaicLogin.token();
   if (tok && !headers["Authorization"]) headers["Authorization"] = `Bearer ${tok}`;
   if (opts.body !== undefined && !(opts.body instanceof FormData) && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
@@ -860,7 +857,36 @@ window.addEventListener("offline", () => setOfflineMode(true));
 
 // ── auth ──────────────────────────────────────────────────────────────────
 
+// The part's card labels (the part ships English defaults — the app is German).
+const LOGIN_STRINGS = {
+  signIn: "Anmelden",
+  expired: "Sitzung abgelaufen. Bitte erneut anmelden.",
+  username: "Benutzername",
+  password: "Passwort",
+  usePassword: "Mit Passwort anmelden",
+  passkey: "Mit Passkey anmelden",
+  pkNeedUser: "Zuerst Benutzernamen eingeben",
+  google: "Mit Google anmelden",
+  minLen: "Das neue Passwort muss mindestens 4 Zeichen lang sein.",
+  changed: "Passwort geändert.",
+  changeFailed: "Ändern fehlgeschlagen: ",
+  passkeyAdded: "Passkey registriert — beim nächsten Login „Mit Passkey anmelden“.",
+  passkeyError: "Passkey: ",
+};
+
 async function boot() {
+  // One-time migration (pre-ADR-0174 sessions lived under "ariatoken").
+  try {
+    const old = localStorage.getItem("ariatoken");
+    if (old && !localStorage.getItem("mosaic_token")) {
+      localStorage.setItem("mosaic_token", old);
+      localStorage.removeItem("ariatoken");
+    }
+  } catch (e) {}
+  // The brain session is the part's (ADR 0174): stored token first, then the
+  // /api/auth/me cookie bridge; offline a stored token stays trusted; a 401
+  // clears it + flags the expired banner on the card.
+  await MosaicLogin.boot();
   let me;
   let netDown = false;
   try {
@@ -872,29 +898,31 @@ async function boot() {
     me = { ok: false };
   }
   if (!me.ok) {
+    // The shared card (the same one the bible app mounts): aria strings +
+    // the adapter handoff after ANY successful method (the ASK surface and
+    // the native shell have no browser cookie — /dl/login carries the JWT
+    // server-side). Success ends in a full reload (the part).
+    const ov = MosaicLogin.mount($("login"), {
+      strings: LOGIN_STRINGS,
+      afterLogin: async (s) => {
+        await api("/dl/login", { method: "POST", body: JSON.stringify({ token: s.token }) });
+      },
+    });
     if (netDown) {
       // The SW may still serve a CACHED /dl/me on the next load; until
       // then: explain that login needs one online visit.
       setOfflineMode(true);
-      $("login-error").textContent =
+      const note = document.createElement("p");
+      note.className = "login-netdown";
+      note.textContent =
         "Keine Verbindung zum Server. Einmalig online anmelden — danach öffnet die App auch offline (mit letztem Stand + gespeicherten Titeln).";
+      ov.querySelector(".login-card").after(note);
     }
-    $("login").classList.remove("hidden");
-    $("login-user").focus();
     return;
   }
   setOfflineMode(!navigator.onLine);
   const u = me.user || {};
   window.__me = u;
-  // SSO cookie bridge: a pure-Google session authenticates /dl/* via the
-  // HttpOnly mosaic_token cookie, but the BRAIN's endpoints (/api/auth/…)
-  // need the JWT itself — /api/auth/me echoes it back in its body (the
-  // cookie rides the same-origin fetch). Best effort: a stored token or a
-  // password-only session simply keeps what it has.
-  if (!getToken()) {
-    const bridged = await api("/api/auth/me").catch(() => null);
-    if (bridged && bridged.token) storeToken(bridged.token);
-  }
   const isSso = u.provider === "google" || String(u.user || "").startsWith("google:");
   const who = u.name || u.user || "?";
   // The tenant dim is the app's GROUP (the household) — one for a long
@@ -921,148 +949,15 @@ async function boot() {
   refreshEnrichBadge();
 }
 
-$("login-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  $("login-error").textContent = "";
-  try {
-    const brain = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: $("login-user").value, password: $("login-pass").value }),
-    });
-    const bd = await brain.json().catch(() => ({}));
-    if (!brain.ok || !bd.token) throw new Error(bd.error || `Anmeldung fehlgeschlagen (HTTP ${brain.status})`);
-    storeToken(bd.token);
-    await api("/dl/login", { method: "POST", body: JSON.stringify({ token: bd.token }) });
-    location.assign("/"); // full reload — boot with the fresh session
-  } catch (err) {
-    $("login-error").textContent = err.message;
-  }
-});
-
-// ── SSO + passkeys (the brain's identity stack; ADR 0169 for the passkeys) ─
-// WebAuthn b64url <-> ArrayBuffer (the browser's atob/btoa are base64, not
-// the b64url the WebAuthn API and the brain both speak).
-function b64urlToBuf(s) {
-  s = String(s).replace(/-/g, "+").replace(/_/g, "/");
-  while (s.length % 4) s += "=";
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-function bufToB64url(b) {
-  let bin = "";
-  const u = new Uint8Array(b);
-  for (let i = 0; i < u.length; i++) bin += String.fromCharCode(u[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-// The brain's begin endpoints return the WebAuthn options directly
-// ({state_id, publicKey}); this is the common navigator.credentials shape.
-function pkOptions(pk) {
-  const o = {
-    challenge: b64urlToBuf(pk.challenge),
-    rpId: pk.rpId,
-    timeout: pk.timeout,
-  };
-  if (pk.allowCredentials) {
-    o.userVerification = pk.userVerification;
-    o.allowCredentials = pk.allowCredentials.map((c) => ({
-      id: b64urlToBuf(c.id),
-      type: c.type || "public-key",
-      transports: c.transports,
-    }));
-  }
-  if (pk.user) {
-    o.user = { id: b64urlToBuf(pk.user.id), name: pk.user.name, displayName: pk.user.displayName };
-    o.pubKeyCredParams = pk.pubKeyCredParams;
-    o.authenticatorSelection = pk.authenticatorSelection;
-    if (pk.excludeCredentials)
-      o.excludeCredentials = pk.excludeCredentials.map((c) => ({ id: b64urlToBuf(c.id), type: c.type || "public-key" }));
-    o.rp = pk.rp;
-  }
-  return o;
-}
-function pkAssertion(assert) {
-  return {
-    id: assert.id,
-    rawId: bufToB64url(assert.rawId),
-    type: assert.type,
-    response: {
-      clientDataJSON: bufToB64url(assert.response.clientDataJSON),
-      authenticatorData: bufToB64url(assert.response.authenticatorData),
-      signature: bufToB64url(assert.response.signature),
-      userHandle: assert.response.userHandle ? bufToB64url(assert.response.userHandle) : null,
-    },
-  };
-}
-function pkRegistration(assert) {
-  return {
-    id: assert.id,
-    rawId: bufToB64url(assert.rawId),
-    type: assert.type,
-    response: {
-      clientDataJSON: bufToB64url(assert.response.clientDataJSON),
-      attestationObject: bufToB64url(assert.response.attestationObject),
-    },
-  };
-}
-
-// Google SSO: a REAL navigation (not fetch) — the browser round-trips
-// accounts.google.com and comes back to /auth/google/callback, where the
-// brain sets the HttpOnly mosaic_token cookie. The adapter reads that cookie
-// directly, so the next boot's /dl/me already works.
-$("login-google").addEventListener("click", () => {
-  location.assign("/auth/google/login?next=/");
-});
-
-// Passkey sign-in: authenticate/begin {username} -> WebAuthn prompt ->
-// authenticate/finish -> the session JWT (same token the password path gets).
-$("login-passkey").addEventListener("click", async () => {
-  const username = $("login-user").value.trim();
-  $("login-error").textContent = "";
-  if (!username) {
-    $("login-error").textContent = "Benutzername eingeben, dann 🔑 drücken.";
-    return;
-  }
-  try {
-    const begin = await api("/api/auth/passkeys/authenticate/begin", {
-      method: "POST",
-      body: JSON.stringify({ username }),
-    });
-    const assert = await navigator.credentials.get({ publicKey: pkOptions(begin.publicKey) });
-    if (!assert) throw new Error("Passkey-Anfrage abgebrochen.");
-    const fin = await api("/api/auth/passkeys/authenticate/finish", {
-      method: "POST",
-      body: JSON.stringify({ state_id: begin.state_id, credential: pkAssertion(assert) }),
-    });
-    storeToken(fin.token);
-    await api("/dl/login", { method: "POST", body: JSON.stringify({ token: fin.token }) });
-    location.assign("/");
-  } catch (err) {
-    $("login-error").textContent =
-      /no passkey registered/i.test(err.message)
-        ? "Kein Passkey für diesen Benutzer registriert (im Konto-Bereich unten links)."
-        : err.message;
-  }
-});
-
+// ── SSO + passkeys ─ the MosaicLogin part (ADR 0174, /login.js) owns all of
+// it now: the Google navigation, the password form, the WebAuthn
+// authenticate begin/finish (b64url + response shaping), the cookie bridge
+// and the full reload after success. The app only mounts it (boot) and
+// hands the token to the adapter (afterLogin).
 // Passkey registration (session required; the brain binds it to the IAM
-// user behind the session — local accounts only).
-$("acc-passkey").addEventListener("click", async () => {
-  try {
-    const begin = await api("/api/auth/passkeys/register/begin", { method: "POST", body: "{}" });
-    const cred = await navigator.credentials.create({ publicKey: pkOptions(begin.publicKey) });
-    if (!cred) throw new Error("Registrierung abgebrochen.");
-    await api("/api/auth/passkeys/register/finish", {
-      method: "POST",
-      body: JSON.stringify({ state_id: begin.state_id, credential: pkRegistration(cred) }),
-    });
-    toast("Passkey registriert — beim nächsten Login 🔑 drücken.");
-  } catch (err) {
-    toast(err.message, true);
-  }
-});
+// user behind the session — local accounts only). The part owns the
+// WebAuthn create + finish (and its toasts).
+$("acc-passkey").addEventListener("click", () => MosaicLogin.registerPasskey());
 
 // Self-service password change (local accounts only — the brain fails closed
 // for SSO principals with a named error).
@@ -1081,27 +976,21 @@ document.querySelectorAll("#pw-sheet [data-close]").forEach((b) => (b.onclick = 
 $("pw-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("pw-error").textContent = "";
-  try {
-    // 204 No Content on success — api() tolerates the empty body.
-    await api("/api/auth/me/password", {
-      method: "PUT",
-      body: JSON.stringify({ oldPassword: $("pw-old").value, password: $("pw-new").value }),
-    });
+  const ok = await MosaicLogin.changePassword($("pw-old").value, $("pw-new").value);
+  if (ok) {
     closePwSheet();
-    toast("Passwort geändert.");
-  } catch (err) {
-    $("pw-error").textContent = err.message;
+  } else {
+    $("pw-error").textContent = "Passwort ändern fehlgeschlagen (siehe Hinweis).";
   }
 });
 
-// Sign-out: drop the stored token AND the SSO cookie session (a real
-// same-origin fetch so the browser applies the Set-Cookie deletion — clearing
-// only client state would auto-re-login on the next /dl/me cookie bridge).
+// Sign-out: the adapter session first, then the part (it clears the stored
+// token AND fires /auth/logout as a fetch so the browser applies the
+// Set-Cookie deletion — clearing only client state would auto-re-login on
+// the next /dl/me cookie bridge).
 $("logout").addEventListener("click", async () => {
-  storeToken(null);
-  await fetch("/auth/logout").catch(() => {});
   await api("/dl/logout", { method: "POST" }).catch(() => {});
-  location.reload();
+  MosaicLogin.logout();
 });
 
 // ── views (sidebar / bottom nav: Medien · Suche · Playlists · Werkzeuge) ──

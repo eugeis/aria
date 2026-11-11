@@ -26,95 +26,20 @@ body {
 .spacer { flex: 1; }
 code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
 
-/* login — a full-viewport overlay: while signed out the app beneath is
-   not interactive (previously the tabs behind the card could be clicked
-   into a confusing half-state). */
-.login {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: var(--bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: auto;
-}
-.login-card {
+/* login — the card itself is the MosaicLogin part (ADR 0174: web/login.css,
+   emitted by the web lens, the bible design). The app only styles the
+   offline note the part's overlay carries below the card. */
+.login-netdown {
+  margin: 12px auto 0;
+  max-width: 340px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 32px 36px;
-  width: 340px;
+  border-radius: 8px;
   text-align: center;
 }
-.login-card h1 { margin: 8px 0 4px; }
-.login-card form { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
-.login-card input {
-  background: var(--panel2);
-  border: 1px solid var(--line);
-  color: var(--text);
-  border-radius: 8px;
-  padding: 10px 12px;
-}
-/* SSO + passkey login (bible layout): Google primary, passkey row,
-   password collapsed in a <details> */
-.google-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  width: 100%;
-  margin-top: 18px;
-  padding: 11px 12px;
-  background: #fff;
-  color: #1f1f1f;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.google-btn:hover { background: #f2f2f2; }
-.google-btn .g-ic {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px; height: 18px;
-  font-weight: 700;
-  font-size: 13px;
-  color: #4285f4;
-}
-.login-or {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 14px 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-.login-or::before, .login-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.login-row { display: flex; gap: 8px; }
-.login-row input { flex: 1; margin: 0; }
-.pk-btn {
-  flex: none;
-  width: 46px;
-  background: var(--panel2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-size: 16px;
-  cursor: pointer;
-}
-.pk-btn:hover { border-color: var(--accent); }
-.login-card details { margin-top: 12px; text-align: left; }
-.login-card details summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 13px;
-  padding: 6px 2px;
-  user-select: none;
-}
-.login-card details[open] summary { margin-bottom: 8px; }
-.login-card details form { margin-top: 0; }
 
 /* header + tabs */
 header {
