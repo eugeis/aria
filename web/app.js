@@ -255,14 +255,19 @@ function playerNext(manual = false) {
     return;
   }
   if (player.order) {
-    const p = player.order.indexOf(player.idx);
+    let p = player.order.indexOf(player.idx);
+    if (p < 0) {
+      // stale order (defensive): rebuild from the current position
+      player.order = shuffleOrder(Math.max(player.idx, 0));
+      p = player.order.indexOf(player.idx);
+    }
     if (p >= 0 && p < player.order.length - 1) {
       player.idx = player.order[p + 1];
       playCurrent();
       return;
     }
     if (player.repeat === "context") {
-      player.order = shuffleOrder(player.idx);
+      player.order = shuffleOrder(Math.max(player.idx, 0));
       player.idx = player.order[0];
       playCurrent();
       return;
