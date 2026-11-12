@@ -79,6 +79,14 @@ app:
     - path: /privacy
       title: Datenschutzerklärung
       body_file: privacy.md
+  # ADR 0175: absolute per-view endpoints — the app's views are real URLs
+  # (deep link + refresh serve the shell; the MosaicRouter part keeps
+  # back/forward inside the app instead of the SSO chain; the login part's
+  # SSO next= carries the current view).
+  spa_routes:
+    - /search
+    - /playlists
+    - /tools
   # Native apps (Tauri): out/native is a Tauri v2 shell whose window drives
   # this very server (the static SPA + REST API) on loopback. Desktop
   # targets fully wired; android/ios are documented scaffolds (in-process

@@ -1002,6 +1002,17 @@ $("logout").addEventListener("click", async () => {
 let currentView = "home";
 let currentTool = "queue";
 
+// ── views as absolute endpoints (ADR 0175: app.spa_routes) ─────────────
+// Every view is a real URL: deep links + refresh land on it (the server
+// serves the shell), back/forward walk the views (the MosaicRouter part),
+// and the SSO login returns to the current view (next=<path>).
+const VIEW_PATHS = { home: "/", search: "/search", playlists: "/playlists", tools: "/tools" };
+MosaicRouter.on("/", () => showView("home"));
+MosaicRouter.on("/search", () => showView("search"));
+MosaicRouter.on("/playlists", () => showView("playlists"));
+MosaicRouter.on("/tools", () => showView("tools"));
+MosaicRouter.notFound(() => MosaicRouter.replace("/"));
+
 function showView(name) {
   currentView = name;
   document.querySelectorAll(".sidebar button[data-view], #bottom-nav button[data-view]").forEach((x) =>
@@ -1036,7 +1047,7 @@ function showTool(name) {
 }
 
 document.querySelectorAll(".sidebar button[data-view], #bottom-nav button[data-view]").forEach((b) =>
-  b.addEventListener("click", () => showView(b.dataset.view))
+  b.addEventListener("click", () => MosaicRouter.go(VIEW_PATHS[b.dataset.view]))
 );
 document.querySelectorAll("#tool-tabs button[data-tool]").forEach((b) =>
   b.addEventListener("click", () => showTool(b.dataset.tool))
@@ -1460,7 +1471,7 @@ function handleCardClick(e) {
   const plOpen = e.target.closest("[data-pl-open]");
   if (plOpen) {
     openPlaylistView(Number(plOpen.dataset.plOpen));
-    showView("playlists");
+    MosaicRouter.go("/playlists");
     return;
   }
   const card = e.target.closest(".card[data-card]");
@@ -1669,9 +1680,9 @@ async function doSearch() {
 }
 
 $("search-q").addEventListener("keydown", (e) => e.key === "Enter" && doSearch());
-$("search-q").addEventListener("focus", () => showView("search"));
+$("search-q").addEventListener("focus", () => MosaicRouter.go("/search"));
 $("search-mode").addEventListener("click", (e) => {
-  if (e.target.closest("button[data-mode]")) showView("search");
+  if (e.target.closest("button[data-mode]")) MosaicRouter.go("/search");
 });
 
 async function loadCollections() {
