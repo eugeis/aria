@@ -117,6 +117,62 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// ── offline write sync (the ADR 0179 pattern, the bible offline-db) ───────
+// Adapter mutations made while offline are queued in the IndexedDB synclog
+// (JSON string per op) and replayed IN ORDER on reconnect/boot. A replay
+// that fails with a server error (4xx) is dropped (already applied / no
+// longer valid); a network failure keeps the op queued.
+let syncSeq = 0;
+function isNetDown(e) {
+  return e instanceof TypeError || /fetch|network|failed to fetch/i.test(String(e && e.message || ""));
+}
+async function dlMutate(path, method, body) {
+  try {
+    return await api(path, { method, body: body !== undefined ? JSON.stringify(body) : undefined });
+  } catch (e) {
+    if (!isNetDown(e)) throw e;
+    const id = `s${Date.now()}_${++syncSeq}`;
+    await window.AriaOfflineDB.put("synclog", id, JSON.stringify({ path, method, body })).catch(() => {});
+    updateSyncBadge();
+    toast("Offline — die Änderung wird nach dem Reconnect gesendet.");
+    return { queued: true };
+  }
+}
+async function flushSynclog() {
+  if (!MosaicLogin.token()) return; // mutations need a session
+  let keys = [];
+  try { keys = (await window.AriaOfflineDB.keys("synclog")) || []; } catch (e) { return; }
+  keys.sort();
+  let replayed = 0;
+  for (const k of keys) {
+    let op;
+    try { op = JSON.parse(await window.AriaOfflineDB.get("synclog", k)); } catch (e) { continue; }
+    try {
+      await api(op.path, { method: op.method, body: op.body !== undefined ? JSON.stringify(op.body) : undefined });
+      await window.AriaOfflineDB.del("synclog", k);
+      replayed++;
+    } catch (e) {
+      if (isNetDown(e)) break; // still offline — keep the rest queued
+      await window.AriaOfflineDB.del("synclog", k).catch(() => {}); // 4xx — drop
+    }
+  }
+  if (replayed) {
+    toast(`${replayed} Offline-Änderung${replayed === 1 ? "" : "en"} gesendet.`);
+    renderQueue(await api("/dl/queue").catch(() => ({ items: [] })));
+    loadPlaylists();
+  }
+  updateSyncBadge();
+}
+async function updateSyncBadge() {
+  const badge = $("sync-badge");
+  if (!badge) return;
+  let n = 0;
+  try { n = ((await window.AriaOfflineDB.keys("synclog")) || []).length; } catch (e) {}
+  badge.textContent = n ? `⛅ ${n} offline` : "";
+  badge.classList.toggle("hidden", !n);
+}
+window.addEventListener("online", () => flushSynclog());
+
 function playlistSelectHtml(selected = "") {
   // Only playlists the caller may EDIT (own, or admin) — adding to someone
   // else's shared playlist would be a 404.
@@ -947,6 +1003,9 @@ async function boot() {
   renderOffline();
   startQueuePolling();
   refreshEnrichBadge();
+  askWire();
+  updateSyncBadge();
+  flushSynclog(); // replay the offline write queue (the ADR 0179 pattern)
 }
 
 // ── SSO + passkeys ─ the MosaicLogin part (ADR 0174, /login.js) owns all of
@@ -1006,10 +1065,11 @@ let currentTool = "queue";
 // Every view is a real URL: deep links + refresh land on it (the server
 // serves the shell), back/forward walk the views (the MosaicRouter part),
 // and the SSO login returns to the current view (next=<path>).
-const VIEW_PATHS = { home: "/", search: "/search", playlists: "/playlists", tools: "/tools" };
+const VIEW_PATHS = { home: "/", search: "/search", playlists: "/playlists", ask: "/ask", tools: "/tools" };
 MosaicRouter.on("/", () => showView("home"));
 MosaicRouter.on("/search", () => showView("search"));
 MosaicRouter.on("/playlists", () => showView("playlists"));
+MosaicRouter.on("/ask", () => showView("ask"));
 MosaicRouter.on("/tools", () => showView("tools"));
 MosaicRouter.notFound(() => MosaicRouter.replace("/"));
 
@@ -1052,6 +1112,165 @@ document.querySelectorAll(".sidebar button[data-view], #bottom-nav button[data-v
 document.querySelectorAll("#tool-tabs button[data-tool]").forEach((b) =>
   b.addEventListener("click", () => showTool(b.dataset.tool))
 );
+
+// ── ask — the /api/assistant/chat surface (the bible Ask, ADR 0178) ──────
+// Streaming SSE (sources / react / delta / error / done), markdown + the
+// collapsible ReAct plan (ask-md.js), the persona select, the per-chat tool
+// allowlist and the file attach — over the assistant REST the mosaic brain
+// emits for this tessera (personas: the aria-copilot composite).
+const ASK_PERSONAS = [
+  { name: "", label: "Standard" },
+  { name: "anbetung", label: "Anbetung (Sets & Abende)" },
+  { name: "predigt", label: "Predigt (Forschung)" },
+  { name: "mediathek", label: "Mediathek (Katalog)" },
+];
+let askMsgs = [];   // {role, text, react, sources}
+let askBusy = false;
+let askFiles = [];  // {name, id} (the ADR 0178 upload ids)
+let askToolDefs = null;
+
+function srcLabel(meta) {
+  if (!meta) return "Quelle";
+  if (meta.name) return meta.name;
+  if (meta.title) return meta.title;
+  const parts = [];
+  for (const k of ["artist", "album", "title", "date", "collection", "book"]) if (meta[k]) parts.push(meta[k]);
+  return parts.join(" · ") || "Quelle";
+}
+function askRender() {
+  const log = $("ask-log");
+  log.innerHTML = askMsgs.map((m) => {
+    if (m.role === "user") return `<div class="msg user">${esc(m.text)}</div>`;
+    if (m.role === "system") return `<div class="msg system">${esc(m.text)}</div>`;
+    const react = m.react.length ? `<div class="react-plan-wrap">${window.AskMd.renderPlan(m.react)}</div>` : "";
+    const text = `<div class="msg-text">${m.text ? window.AskMd.renderMarkdown(m.text) : '<span class="muted">denke nach …</span>'}</div>`;
+    const sources = (m.sources || []).map((s, i) =>
+      `<span class="src"><span class="src-ref">[${i + 1}]</span> ${esc(srcLabel(s.meta))}${s.quote ? `<span class="src-quote"> — ${esc(String(s.quote).slice(0, 140))}</span>` : ""}</span>`
+    ).join("");
+    return `<div class="msg assistant">${react}${text}${sources ? `<div class="sources">${sources}</div>` : ""}</div>`;
+  }).join("");
+  log.scrollTop = log.scrollHeight;
+}
+// The SSE reader (the bible stream_chat in plain JS): event:/data: frames,
+// a TextDecoder in streaming mode so a multi-byte char split across chunks
+// is carried over.
+async function askOnSse(res, m) {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder("utf-8");
+  let buf = "", ev = "message";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl).replace(/\r$/, "");
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      if (line.startsWith("event:")) ev = line.slice(6).trim();
+      else if (line.startsWith("data:")) {
+        const data = line.slice(5).trim();
+        if (ev === "sources") { try { m.sources = JSON.parse(data); } catch (e) {} }
+        else if (ev === "react") { try { m.react.push(JSON.parse(data)); } catch (e) {} }
+        else if (ev === "delta") { if (m.text === "…") m.text = data; else m.text += data; }
+        else if (ev === "error") { m.text = (m.text === "…" ? "" : m.text) + `\n\n⚠ ${data}`; }
+        else if (ev === "done") {
+          try {
+            const d = JSON.parse(data);
+            if (d.answer) m.text = d.answer;
+            if (Array.isArray(d.sources) && d.sources.length) m.sources = d.sources;
+            if (!m.react.length && Array.isArray(d.react_trace)) m.react = d.react_trace;
+          } catch (e) {}
+        }
+        ev = "message";
+        askRender();
+      }
+    }
+  }
+}
+async function askSend() {
+  const q = $("ask-text").value.trim();
+  if (!q || askBusy) return;
+  askBusy = true;
+  $("ask-send").disabled = true;
+  askMsgs.push({ role: "user", text: q });
+  const m = { role: "assistant", text: "…", react: [], sources: [] };
+  askMsgs.push(m);
+  askRender();
+  $("ask-text").value = "";
+  try {
+    const body = { query: q, stream: true, top_k: 5, agent: true };
+    const persona = $("ask-persona").value;
+    if (persona) body.persona = persona;
+    if (askFiles.length) body.files = askFiles.map((f) => f.id);
+    const tools = [...document.querySelectorAll("#ask-tools input:checked")].map((c) => c.value);
+    if (tools.length) body.tools = tools; // empty = all tools (ADR 0178)
+    const res = await fetch("/api/assistant/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${MosaicLogin.token()}` },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || `HTTP ${res.status}`);
+    }
+    await askOnSse(res, m);
+    askFiles = [];
+    askRenderChips();
+  } catch (e) {
+    m.text = (m.text === "…" ? "" : m.text) + `\n\n⚠ ${String(e.message || e)}`;
+    askRender();
+  }
+  askBusy = false;
+  $("ask-send").disabled = false;
+}
+function askRenderChips() {
+  $("ask-chips").innerHTML = askFiles.map((f, i) =>
+    `<span class="ask-attach-chip">📄 ${esc(f.name)} <span class="x" data-ask-del="${i}">×</span></span>`
+  ).join("");
+}
+async function askLoadTools() {
+  if (askToolDefs) return;
+  try {
+    const r = await api("/api/assistant/tools");
+    askToolDefs = Array.isArray(r) ? r : r.tools || [];
+  } catch (e) {
+    askToolDefs = [];
+  }
+  $("ask-tools").innerHTML = askToolDefs.length
+    ? askToolDefs.map((t) => `<label class="tool-chk"><input type="checkbox" value="${esc(t.name)}"> ${esc(t.name)}${t.about ? ` <span class="muted">— ${esc(t.about)}</span>` : ""}</label>`).join("")
+    : '<span class="muted">Keine Werkzeuge deklariert.</span>';
+}
+function askWire() {
+  $("ask-persona").innerHTML = ASK_PERSONAS.map((p) => `<option value="${p.name}">${p.label}</option>`).join("");
+  $("ask-send").addEventListener("click", askSend);
+  $("ask-text").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askSend(); }
+  });
+  $("ask-new").addEventListener("click", () => { askMsgs = []; askFiles = []; askRender(); askRenderChips(); });
+  $("ask-tools-btn").addEventListener("click", async () => {
+    $("ask-options").classList.toggle("hidden");
+    $("ask-tools-btn").classList.toggle("active");
+    await askLoadTools();
+  });
+  $("ask-file").addEventListener("change", async (e) => {
+    for (const f of e.target.files) {
+      if (f.size > 200 * 1024) { toast(`„${f.name}“ ist größer als 200 KB`, true); continue; }
+      try {
+        const r = await api("/api/assistant/upload", { method: "POST", body: JSON.stringify({ name: f.name, content: await f.text() }) });
+        askFiles.push({ name: f.name, id: r.id });
+        askRenderChips();
+      } catch (err) { toast(`Anhängen fehlgeschlagen: ${err.message}`, true); }
+    }
+    e.target.value = "";
+  });
+  $("ask-chips").addEventListener("click", (e) => {
+    const x = e.target.closest("[data-ask-del]");
+    if (!x) return;
+    askFiles.splice(Number(x.dataset.askDel), 1);
+    askRenderChips();
+  });
+}
 
 // ── browse (home cards, library drill-down, album view) ─────────────────
 //
@@ -1704,10 +1923,12 @@ async function queueYtItems(hits, artist, album) {
     track: i + 1,
   }));
   try {
-    const r = await api("/dl/queue", { method: "POST", body: JSON.stringify({ items }) });
-    toast(`${items.length} in die Download-Warteschlange`);
-    if (r.errors?.length) toast(r.errors.join(" "), true);
-    refreshQueueNow();
+    const r = await dlMutate("/dl/queue", "POST", { items });
+    if (!r.queued) {
+      toast(`${items.length} in die Download-Warteschlange`);
+      if (r.errors?.length) toast(r.errors.join(" "), true);
+      refreshQueueNow();
+    }
   } catch (err) {
     toast(err.message, true);
   }
@@ -1906,7 +2127,7 @@ $("pl-new").addEventListener("click", async () => {
   const name = $("pl-new-name").value.trim();
   if (!name) return;
   try {
-    const r = await api("/dl/playlists", { method: "POST", body: JSON.stringify({ name }) });
+    const r = await dlMutate("/dl/playlists", "POST", { name });
     $("pl-new-name").value = "";
     await loadPlaylists(r.id);
   } catch (e) {
@@ -1935,11 +2156,13 @@ $("pl-download-all").addEventListener("click", () => {
     collection,
     track: i + 1,
   }));
-  api("/dl/queue", { method: "POST", body: JSON.stringify({ items }) })
+  dlMutate("/dl/queue", "POST", { items })
     .then((r) => {
-      toast(`${items.length} YouTube-Titel in die Download-Warteschlange`);
-      if (r.errors?.length) toast(r.errors.join(" "), true);
-      refreshQueueNow();
+      if (!r.queued) {
+        toast(`${items.length} YouTube-Titel in die Download-Warteschlange`);
+        if (r.errors?.length) toast(r.errors.join(" "), true);
+        refreshQueueNow();
+      }
     })
     .catch((e) => toast(e.message, true));
 });
@@ -2003,8 +2226,9 @@ $("queue-table").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-act]");
   if (!b) return;
   try {
-    if (b.dataset.act === "q-cancel") await api(`/dl/queue/${b.dataset.id}/cancel`, { method: "POST" });
-    else await api(`/dl/queue/${b.dataset.id}`, { method: "DELETE" });
+    if (b.dataset.act === "q-cancel") await dlMutate(`/dl/queue/${b.dataset.id}/cancel`, "POST");
+    else await dlMutate(`/dl/queue/${b.dataset.id}`, "DELETE");
+    if (!navigator.onLine) return; // offline: the replay refreshes the queue
     refreshQueueNow();
   } catch (err) {
     toast(err.message, true);

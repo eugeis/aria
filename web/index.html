@@ -27,10 +27,12 @@
     <nav class="side-nav">
       <button data-view="home" class="active"><span class="sv-ic">♫</span> Medien</button>
       <button data-view="playlists"><span class="sv-ic">≡</span> Playlists <span id="pl-count" class="count hidden">0</span></button>
+      <button data-view="ask"><span class="sv-ic">✦</span> Fragen</button>
       <button data-view="tools"><span class="sv-ic">⚒</span> Werkzeuge <span id="tools-count" class="count hidden">0</span></button>
     </nav>
     <div class="side-foot">
       <span id="lib-total" class="muted"></span>
+      <span id="sync-badge" class="sync-badge hidden"></span>
       <div class="side-account">
         <div class="avatar" id="acc-avatar">?</div>
         <div class="acc-text">
@@ -261,6 +263,36 @@
       </div>
       <div id="search-results" class="results"></div>
     </section>
+
+    <!-- ASK (the /api/assistant/chat RAG/ReAct surface — the bible Ask,
+         ADR 0178: file attach + the per-chat tool allowlist) -->
+    <section id="view-ask" class="view">
+      <div class="ask-page">
+        <div class="ask-head">
+          <h2>Fragen</h2>
+          <select id="ask-persona" title="Persona"></select>
+          <button id="ask-tools-btn" class="ask-opts" title="Werkzeuge wählen">🛠</button>
+          <button id="ask-new" class="ask-new" title="Neuer Chat">Neu</button>
+        </div>
+        <div id="ask-options" class="ask-options hidden">
+          <label class="ask-tools-label">Werkzeuge (leer = alle)</label>
+          <div id="ask-tools" class="ask-tools"></div>
+        </div>
+        <div id="ask-log" class="ask-log"></div>
+        <div class="ask-composer">
+          <div id="ask-chips" class="ask-chips"></div>
+          <div class="ask-input-row">
+            <label class="ask-ico" title="Textdatei anhängen (≤ 200 KB)">📎
+              <input type="file" id="ask-file" class="ask-file" accept=".txt,.md,.srt,.vtt,.csv,.json,text/*" multiple>
+            </label>
+            <textarea id="ask-text" class="ask-textarea" rows="1"
+              placeholder="Frag nach Musik, Alben, Predigten, Playlists …"></textarea>
+            <button id="ask-send" class="ask-send">Los</button>
+          </div>
+          <div class="ask-foot" id="ask-foot">Geerdet in deiner Mediathek · [n] = Quelle</div>
+        </div>
+      </div>
+    </section>
   </div>
   <!-- RIGHT RAIL (≥1280px) — the `layout: app` window model (ADR 0168): a
        persistent "Now Playing" + queue column, the desktop counterpart of
@@ -288,6 +320,7 @@
   <button data-view="home" class="active"><span class="bn-ic">♫</span>Medien</button>
   <button data-view="search"><span class="bn-ic">⌕</span>Suche</button>
   <button data-view="playlists"><span class="bn-ic">≡</span>Playlists<span id="bn-pl-count" class="count hidden">0</span></button>
+  <button data-view="ask"><span class="bn-ic">✦</span>Fragen</button>
   <button data-view="tools"><span class="bn-ic">⚒</span>Werkzeuge<span id="bn-tools-count" class="count hidden">0</span></button>
 </nav>
 
@@ -348,6 +381,8 @@
 <script src="/pwa.js" defer></script>
 <script src="/router.js"></script>
 <script src="/login.js"></script>
+<script src="/ask-md.js"></script>
+<script src="/offline-db.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

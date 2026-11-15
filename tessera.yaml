@@ -86,6 +86,7 @@ app:
   spa_routes:
     - /search
     - /playlists
+    - /ask
     - /tools
   # Native apps (Tauri): out/native is a Tauri v2 shell whose window drives
   # this very server (the static SPA + REST API) on loopback. Desktop
