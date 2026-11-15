@@ -1172,11 +1172,10 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
 .player-art.has-art { display: block; }
 .player-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
-/* old shell leftovers — the v2 layout replaces header/.tabs/.tab */
-header { display: none; }
-nav.tabs { display: none; }
-#more-sheet { display: none !important; }
-main { display: contents; }
+/* the v2 layout replaced the old shell's header/.tabs/.tab — those elements
+   no longer exist (the ONLY <header> in the app is the .topbar search bar,
+   which must stay visible — a blanket `header { display: none }` here hid it
+   and with it the whole search box + the YouTube search mode). */
 
 /* ══ mobile (<= 720px) ══════════════════════════════════════════════════ */
 @media (max-width: 720px) {
