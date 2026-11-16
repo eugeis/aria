@@ -477,7 +477,6 @@ async fn do_lookup(
     // MusicBrainz is the PRIMARY source; whenever it does not deliver an
     // image (blocked — the li7 egress gets 503s — no match, weak match,
     // no CAA art) the iTunes Search API below gets the same shot.
-    let mut mb_usable = false;
     if releases.is_empty() {
         entry.note = if last_err.is_empty() {
             "kein MusicBrainz-Treffer".into()
@@ -508,7 +507,6 @@ async fn do_lookup(
                 entry.note = format!("best match too weak (score {score:.2})");
             }
             Some((score, rel)) => {
-                mb_usable = true;
                 entry.found = true;
                 entry.score = score;
                 entry.release_title = rel.get("title").and_then(|t| t.as_str()).unwrap_or("").into();
@@ -555,8 +553,9 @@ async fn do_lookup(
             }
         }
     }
-    // iTunes: every path where MusicBrainz did not deliver an image.
-    if !mb_usable && entry.art_b64.is_empty() && entry.art_artist_b64.is_empty() {
+    // iTunes: whenever no image was found (MB blocked, no match, weak
+    // match, or a match without CAA art).
+    if entry.art_b64.is_empty() && entry.art_artist_b64.is_empty() {
         if let Some((b64, mime, title, credit, year, score)) =
             fetch_itunes(enrich, artist, album).await
         {
