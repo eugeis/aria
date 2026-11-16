@@ -2560,10 +2560,12 @@ function enrichRowHtml(a, i) {
     : `<div class="en-art none" style="background:${tileColor(label)}">${esc((label || "?").charAt(0).toUpperCase())}</div>`;
   let match;
   if (a.state === "busy") match = `<span class="muted">suche …</span>`;
-  else if (done && a.entry && a.entry.found)
+  else if (done && a.entry && a.entry.found) {
+    const src = a.entry.source === "itunes" ? "iTunes" : "MusicBrainz";
     match = `<span class="muted">${isArtist
-      ? `Künstlerbild: ${esc(a.entry.release_artist || a.artist)}`
-      : `MusicBrainz: ${esc(a.entry.release_title || a.album)}${a.entry.year ? " · " + esc(a.entry.year) : ""} <small>(${Number(a.entry.score || 0).toFixed(2)})`}</span>`;
+      ? `Künstlerbild: ${esc(a.entry.release_artist || a.artist)} (${src})`
+      : `${src}: ${esc(a.entry.release_title || a.album)}${a.entry.year ? " · " + esc(a.entry.year) : ""} <small>(${Number(a.entry.score || 0).toFixed(2)})`}</span>`;
+  }
   else if (done) match = `<span class="muted">${esc((a.entry && a.entry.note) || "kein Treffer")}</span>`;
   else match = `<span class="muted">noch nicht gesucht</span>`;
   return `<div class="en-row">

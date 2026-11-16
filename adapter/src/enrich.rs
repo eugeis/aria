@@ -21,6 +21,10 @@ use std::time::{Duration, Instant};
 
 const MB_BASE: &str = "https://musicbrainz.org/ws/2";
 const CAA_BASE: &str = "https://coverartarchive.org";
+/// iTunes Search API — the art fallback: free, keyless, 600px artwork,
+/// and reachable from networks where MusicBrainz (Cloudflare) answers
+/// 503 (the li7 egress has been blocked since 2026-11).
+const ITUNES_BASE: &str = "https://itunes.apple.com/search";
 const USER_AGENT: &str =
     "aria-media/1.0 ( https://aria.eisler-systems.de ) adapter@eisler-systems.de";
 const MIN_INTERVAL: Duration = Duration::from_millis(1100);
@@ -57,6 +61,10 @@ pub struct EnrichEntry {
     pub art_artist_mime: String,
     #[serde(default)]
     pub artist_mbid: String,
+    /// Which upstream produced the data ("musicbrainz" / "itunes") — the
+    /// preview shows it in the match line.
+    #[serde(default = "default_source")]
+    pub source: String,
     /// A human note when the search failed or found no art.
     #[serde(default)]
     pub note: String,
@@ -388,6 +396,7 @@ async fn do_lookup(
         art_artist_b64: String::new(),
         art_artist_mime: String::new(),
         artist_mbid: String::new(),
+        source: default_source(),
         note: String::new(),
         updated_at: now_secs(),
     };
@@ -534,8 +543,25 @@ async fn do_lookup(
     if entry.art_b64.is_empty() {
         fetch_artist_art(enrich, &mut entry).await;
     }
+    // 4) Still nothing (MusicBrainz blocked or no match): iTunes.
+    if entry.art_b64.is_empty() && entry.art_artist_b64.is_empty() {
+        if let Some((b64, mime, title, credit, year, score)) =
+            fetch_itunes(enrich, artist, album).await
+        {
+            entry.art_b64 = b64;
+            entry.art_mime = mime;
+            entry.found = true;
+            entry.score = score;
+            entry.source = "itunes".into();
+            entry.release_title = title;
+            entry.release_artist = credit;
+            if entry.year.is_empty() {
+                entry.year = year;
+            }
+        }
+    }
     if entry.art_b64.is_empty() && entry.art_artist_b64.is_empty() && entry.note.is_empty() {
-        entry.note = "kein Cover beim Cover Art Archive".into();
+        entry.note = "kein Cover (MusicBrainz + iTunes)".into();
     }
     entry
 }
@@ -645,6 +671,22 @@ async fn fetch_artist_art(enrich: &EnrichState, entry: &mut EnrichEntry) {
         entry.art_artist_mime = mime;
         entry.found = true;
     }
+    // MusicBrainz blocked (503 from the li7 egress) or no CAA image:
+    // the iTunes artist-name match's artwork as interpreter image.
+    if entry.art_artist_b64.is_empty() {
+        if let Some((b64, mime, _title, credit, _year, score)) =
+            fetch_itunes(enrich, artist, "").await
+        {
+            entry.art_artist_b64 = b64;
+            entry.art_artist_mime = mime;
+            entry.found = true;
+            entry.source = "itunes".into();
+            if entry.release_artist.is_empty() {
+                entry.release_artist = credit;
+            }
+            entry.score = score;
+        }
+    }
 }
 
 /// Artist-only lookup (empty album in the request): the interpreter image
@@ -665,11 +707,126 @@ async fn do_artist_lookup(enrich: &EnrichState, key: &str, artist: &str) -> Enri
         art_artist_b64: String::new(),
         art_artist_mime: String::new(),
         artist_mbid: String::new(),
+        source: default_source(),
         note: String::new(),
         updated_at: now_secs(),
     };
     fetch_artist_art(enrich, &mut entry).await;
     entry
+}
+
+/// iTunes Search API lookup (the art fallback when MusicBrainz is
+/// unreachable or finds nothing). `album` empty = artist entry: the
+/// best artist-name match's artwork becomes the interpreter image.
+/// Returns (b64, mime, title, credit, year, score) on a usable hit.
+async fn fetch_itunes(
+    enrich: &EnrichState,
+    artist: &str,
+    album: &str,
+) -> Option<(String, String, String, String, String, f64)> {
+    let candidates: Vec<String> = if album.trim().is_empty() {
+        vec![artist.trim().to_string()]
+    } else {
+        let mut v = vec![format!("{} {}", artist.trim(), album.trim())];
+        // Local album names often carry a YouTube-playlist suffix
+        // ("Title - Channel") — the bare title matches better.
+        if let Some(pos) = album.rfind(" - ") {
+            if pos > 4 {
+                v.push(format!("{} {}", artist.trim(), &album[..pos]));
+            }
+        }
+        v
+    };
+    let mut best: Option<(f64, serde_json::Value)> = None;
+    for cand in &candidates {
+        let url = format!(
+            "{ITUNES_BASE}?term={}&media=music&entity=album&limit=5",
+            urlencoded(cand)
+        );
+        for _attempt in 0..2 {
+            enrich.pace().await;
+            match enrich.client.get(&url).send().await {
+                Ok(r) if r.status().is_success() => {
+                    let got = r
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .and_then(|v| v.get("results").and_then(|r| r.as_array()).cloned())
+                        .unwrap_or_default();
+                    for rel in got {
+                        let name = rel
+                            .get("artistName")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("");
+                        let coll = rel
+                            .get("collectionName")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("");
+                        if rel.get("artworkUrl100").and_then(|a| a.as_str()).is_none() {
+                            continue;
+                        }
+                        let score = if album.trim().is_empty() {
+                            word_overlap(artist, name)
+                        } else {
+                            0.6 * word_overlap(album, coll) + 0.4 * word_overlap(artist, name)
+                        };
+                        if score > best.as_ref().map(|(s, _)| *s).unwrap_or(0.0) {
+                            best = Some((score, rel));
+                        }
+                    }
+                    break;
+                }
+                Ok(r) if r.status().is_client_error() => break,
+                _ => tokio::time::sleep(Duration::from_secs(1)).await,
+            }
+        }
+    }
+    let (score, rel) = best?;
+    if score < 0.5 {
+        return None;
+    }
+    // 600x600 rendition of the advertised 100px thumbnail (iTunes URL
+    // convention).
+    let art_url = rel
+        .get("artworkUrl100")
+        .and_then(|a| a.as_str())
+        .unwrap_or("")
+        .replace("100x100bb", "600x600bb");
+    let mut art: Option<(String, String)> = None;
+    for _attempt in 0..2 {
+        enrich.pace().await;
+        match enrich.client.get(&art_url).send().await {
+            Ok(r) if r.status().is_success() => {
+                let mime = r
+                    .headers()
+                    .get(axum::http::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("image/jpeg")
+                    .to_string();
+                if let Ok(bytes) = r.bytes().await {
+                    if (8 * 1024..=8 * 1024 * 1024).contains(&bytes.len()) {
+                        art = Some((base64_encode(&bytes), mime));
+                    }
+                }
+                break;
+            }
+            _ => tokio::time::sleep(Duration::from_secs(1)).await,
+        }
+    }
+    let (b64, mime) = art?;
+    let year = rel
+        .get("releaseDate")
+        .and_then(|d| d.as_str())
+        .map(|d| d.chars().take(4).collect())
+        .unwrap_or_default();
+    Some((
+        b64,
+        mime,
+        rel.get("collectionName").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+        rel.get("artistName").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+        year,
+        score,
+    ))
 }
 
 /// POST /dl/enrich/apply {keys, update_year} — embed the cached covers
@@ -683,6 +840,10 @@ struct ApplyBody {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_source() -> String {
+    "musicbrainz".to_string()
 }
 
 async fn handle_apply(
