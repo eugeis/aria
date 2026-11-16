@@ -474,99 +474,103 @@ async fn do_lookup(
             }
         }
     }
+    // MusicBrainz is the PRIMARY source; whenever it does not deliver an
+    // image (blocked — the li7 egress gets 503s — no match, weak match,
+    // no CAA art) the iTunes Search API below gets the same shot.
+    let mut mb_usable = false;
     if releases.is_empty() {
         entry.note = if last_err.is_empty() {
             "kein MusicBrainz-Treffer".into()
         } else {
             last_err
         };
-        return entry;
-    }
+    } else {
+        let mut best: Option<(f64, serde_json::Value)> = None;
+        for rel in &releases {
+            let title = rel.get("title").and_then(|t| t.as_str()).unwrap_or("");
+            let credit: Vec<String> = rel
+                .get("artist-credit")
+                .and_then(|c| c.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|a| a.get("name").and_then(|n| n.as_str()).map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let score = 0.6 * word_overlap(album, title) + 0.4 * word_overlap(artist, &credit.join(", "));
+            if score > best.as_ref().map(|(s, _)| *s).unwrap_or(0.0) {
+                best = Some((score, rel.clone()));
+            }
+        }
+        match best {
+            None => entry.note = "kein MusicBrainz-Treffer".into(),
+            Some((score, _rel)) if score < 0.5 => {
+                entry.note = format!("best match too weak (score {score:.2})");
+            }
+            Some((score, rel)) => {
+                mb_usable = true;
+                entry.found = true;
+                entry.score = score;
+                entry.release_title = rel.get("title").and_then(|t| t.as_str()).unwrap_or("").into();
+                entry.release_artist = rel
+                    .get("artist-credit")
+                    .and_then(|c| c.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                entry.mbid = rel.get("id").and_then(|i| i.as_str()).unwrap_or("").into();
+                entry.year = rel
+                    .get("date")
+                    .and_then(|d| d.as_str())
+                    .map(|d| d.chars().take(4).collect())
+                    .unwrap_or_default();
+                let rgid = rel
+                    .get("release-group")
+                    .and_then(|g| g.get("id"))
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("");
 
-    let mut best: Option<(f64, serde_json::Value)> = None;
-    for rel in &releases {
-        let title = rel.get("title").and_then(|t| t.as_str()).unwrap_or("");
-        let credit: Vec<String> = rel
-            .get("artist-credit")
-            .and_then(|c| c.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|a| a.get("name").and_then(|n| n.as_str()).map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let score = 0.6 * word_overlap(album, title) + 0.4 * word_overlap(artist, &credit.join(", "));
-        if score > best.as_ref().map(|(s, _)| *s).unwrap_or(0.0) {
-            best = Some((score, rel.clone()));
+                // Cover Art Archive front image, best available size (see
+                // fetch_front); release group first — it covers all
+                // editions — then the release itself.
+                for base in [
+                    format!("{CAA_BASE}/release-group/{rgid}"),
+                    format!("{CAA_BASE}/release/{}", entry.mbid),
+                ] {
+                    if let Some((b64, mime)) = fetch_front(enrich, &base).await {
+                        entry.art_b64 = b64;
+                        entry.art_mime = mime;
+                        break;
+                    }
+                }
+                // No album cover: the artist's image (the interpreter
+                // cover) as the last MB-side fallback.
+                if entry.art_b64.is_empty() {
+                    fetch_artist_art(enrich, &mut entry).await;
+                }
+            }
         }
     }
-
-    let Some((score, rel)) = best else {
-        entry.note = "kein MusicBrainz-Treffer".into();
-        return entry;
-    };
-    if score < 0.5 {
-        entry.note = format!("best match too weak (score {score:.2})");
-        return entry;
-    }
-    entry.found = true;
-    entry.score = score;
-    entry.release_title = rel.get("title").and_then(|t| t.as_str()).unwrap_or("").into();
-    entry.release_artist = rel
-        .get("artist-credit")
-        .and_then(|c| c.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
-    entry.mbid = rel.get("id").and_then(|i| i.as_str()).unwrap_or("").into();
-    entry.year = rel
-        .get("date")
-        .and_then(|d| d.as_str())
-        .map(|d| d.chars().take(4).collect())
-        .unwrap_or_default();
-    let rgid = rel
-        .get("release-group")
-        .and_then(|g| g.get("id"))
-        .and_then(|i| i.as_str())
-        .unwrap_or("");
-
-    // 2) Cover Art Archive front image, best available size (see
-    //    fetch_front); release group first — it covers all editions —
-    //    then the release itself.
-    for base in [
-        format!("{CAA_BASE}/release-group/{rgid}"),
-        format!("{CAA_BASE}/release/{}", entry.mbid),
-    ] {
-        if let Some((b64, mime)) = fetch_front(enrich, &base).await {
-            entry.art_b64 = b64;
-            entry.art_mime = mime;
-            break;
-        }
-    }
-    // 3) No album cover: fall back to the artist's image (the
-    //    interpreter cover — also the candidate for album-less tracks).
-    if entry.art_b64.is_empty() {
-        fetch_artist_art(enrich, &mut entry).await;
-    }
-    // 4) Still nothing (MusicBrainz blocked or no match): iTunes.
-    if entry.art_b64.is_empty() && entry.art_artist_b64.is_empty() {
+    // iTunes: every path where MusicBrainz did not deliver an image.
+    if !mb_usable && entry.art_b64.is_empty() && entry.art_artist_b64.is_empty() {
         if let Some((b64, mime, title, credit, year, score)) =
             fetch_itunes(enrich, artist, album).await
         {
             entry.art_b64 = b64;
             entry.art_mime = mime;
             entry.found = true;
-            entry.score = score;
+            entry.score = score.max(entry.score);
             entry.source = "itunes".into();
             entry.release_title = title;
             entry.release_artist = credit;
             if entry.year.is_empty() {
                 entry.year = year;
             }
+            entry.note.clear(); // the hit beats the MB error note
         }
     }
     if entry.art_b64.is_empty() && entry.art_artist_b64.is_empty() && entry.note.is_empty() {
