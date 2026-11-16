@@ -335,17 +335,26 @@ async fn handle_lookup(
         format!("{}|{}|{}", collection, body.artist, body.album)
     });
 
-    // Already cached (a search that found nothing is cached too — the
-    // network is the expensive part, not the answer). `force` bypasses it.
+    // Already cached. Successful lookups (an image was found) are cached
+    // for good — the network is the expensive part. FAILED lookups get a
+    // short TTL only: a stale miss from an older search strategy (or a
+    // source that was unreachable then, e.g. MusicBrainz 503s) must not
+    // block a newer one — the bulk re-scan re-runs them automatically.
+    // `force` bypasses both.
+    const FAILURE_TTL_SECS: u64 = 900;
     if !body.force {
         let cache = state.enrich.cache.lock().await;
         if let Some(e) = cache.get(&key) {
-            return Json(serde_json::json!({
-                "ok": true,
-                "cached": true,
-                "entry": e,
-            }))
-            .into_response();
+            let has_art = !e.art_b64.is_empty() || !e.art_artist_b64.is_empty();
+            let fresh = now_secs().saturating_sub(e.updated_at) < FAILURE_TTL_SECS;
+            if has_art || fresh {
+                return Json(serde_json::json!({
+                    "ok": true,
+                    "cached": true,
+                    "entry": e,
+                }))
+                .into_response();
+            }
         }
     }
 
