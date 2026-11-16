@@ -75,7 +75,7 @@ struct YtDownloadArgs {
 
 #[tool_router(server_handler)]
 impl AdapterMcp {
-    #[tool(description = "Search YouTube (yt-dlp, the owner's cookies if configured). Returns the top N results: id, title, channel, duration in seconds, url. Call it FIRST, pick the results that actually fit the request (skip re-uploads, live streams, compilations of the wrong kind), then queue the chosen videos with yt_download.")]
+    #[tool(description = "Search YouTube (yt-dlp, the owner's cookies if configured). Returns the top N results: id, title, channel, duration in seconds, url. ONE call is enough — request n=30 or more and pick from those results (skip re-uploads, live streams, wrong language/kind); do NOT search repeatedly. Then queue the chosen videos with yt_download in ONE call and give the final answer.")]
     async fn yt_search(&self, Parameters(a): Parameters<YtSearchArgs>) -> Json<Value> {
         let q = a.query.trim().to_string();
         if q.is_empty() {
