@@ -1192,6 +1192,11 @@ async fn run_one(state: &AppState, item: &DlItem) {
         .arg("--audio-quality")
         .arg("192K")
         .arg("--embed-metadata")
+        // The video's thumbnail becomes the track's cover (APIC) — most
+        // downloaded content has no better art source (the panflöte
+        // library is largely absent from MusicBrainz/iTunes). A failed
+        // thumbnail fetch warns, it does not fail the download.
+        .arg("--embed-thumbnail")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
