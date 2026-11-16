@@ -160,6 +160,12 @@ app:
     # generated MCP client — never inlined).
     MOAIC_MCP_BIBLE_URL: "https://bible.eisler-systems.de/mcp"
     MOAIC_MCP_BIBLE_AUTH: { secret: true }
+    # The aria-ask adapter's MCP endpoint (in-pod loopback — the /dl/mcp
+    # surface the adapter mounts under /dl, where the ingress routes it):
+    # the assistant agent's YouTube tools. The bearer is the SAME secret
+    # the adapter validates as ARIA_MCP_TOKEN (sidecar env, inject.rs).
+    MOAIC_MCP_ADAPTER_URL: "http://127.0.0.1:8090/dl/mcp"
+    MOAIC_MCP_ADAPTER_AUTH: { secret: true }
     # Google SSO (the "Mit Google anmelden" button on the login screen): the
     # OAuth client's credentials. The SAME client the bible app uses — its
     # Google Console "authorized redirect URI" list must additionally carry
@@ -174,6 +180,10 @@ app:
         about: "The bible app's knowledge MCP server — scripture_passage / scripture_translations / scripture_books / search_knowledge over 500+ translation and commentary modules."
         env: MOAIC_MCP_BIBLE_URL
         auth_env: MOAIC_MCP_BIBLE_AUTH
+      - name: adapter
+        about: "The aria-ask adapter's YouTube tools — yt_search / yt_playlist (yt-dlp, the owner's cookies), yt_download (queue into the library; the background worker does mp3 + tags + rescan), queue_status."
+        env: MOAIC_MCP_ADAPTER_URL
+        auth_env: MOAIC_MCP_ADAPTER_AUTH
   deploys:
     - name: li7
       target: k8s

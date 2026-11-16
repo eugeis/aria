@@ -44,6 +44,13 @@ url = "2"
 flate2 = "1"
 base64 = "0.22"
 crc32fast = "1"
+# The MCP server surface (POST /dl/mcp): the brain's assistant agent
+# drives the YouTube tools over streamable HTTP (same pattern as the
+# bible app's /mcp, which the brain already consumes).
+rmcp = { version = "3", features = ["transport-streamable-http-server"] }
+tower-service = "0.3"
+http-body-util = "0.1"
+schemars = "1"
 
 [workspace]
 resolver = "2"

@@ -178,19 +178,20 @@
 
       <div id="tool-reorg" class="tool">
         <p class="muted">
-          Bibliothek aufordnen: Ordnerhierarchie wählen, Dateien per LLM mit sauberen
-          Katalogdaten (Künstler, Album, Sprache, Genre) versorgen, dann alles in das
-          Ziellayout verschieben. IDs, Einbettungen und Playlists bleiben erhalten.
-          <b>Änderungen: nur Admin.</b>
+          Bibliothek aufordnen: Ordnerhierarchie wählen (Standard: Künstler → Album →
+          Sprache), <b>Organisieren</b> sortiert direkt um (ohne Nachfrage). Kataloglücken
+          (Künstler, Album, Sprache, Genre) deckt der LLM-Pass ab.
+          IDs, Einbettungen und Playlists bleiben erhalten. <b>Änderungen: nur Admin.</b>
         </p>
         <div class="row">
-          <label class="chk"><input type="checkbox" id="ro-lang" checked> Sprache</label>
-          <label class="chk"><input type="checkbox" id="ro-genre" checked> Genre</label>
           <label class="chk"><input type="checkbox" id="ro-artist" checked> Künstler</label>
           <label class="chk"><input type="checkbox" id="ro-album" checked> Album</label>
+          <label class="chk"><input type="checkbox" id="ro-lang" checked> Sprache</label>
+          <label class="chk"><input type="checkbox" id="ro-genre"> Genre</label>
           <label class="chk" title="Alben mit nur einem Titel landen alle in einem Ordner „Lose Titel“ pro Künstler statt in 100 Einzelordnern"><input type="checkbox" id="ro-loose" checked> Lose Titel bündeln</label>
           <select id="reorg-collection"></select>
-          <button id="reorg-plan">Vorschau</button>
+          <button id="reorg-auto">Organisieren</button>
+          <button id="reorg-plan" class="ghost">Vorschau</button>
           <button id="reorg-apply" class="ghost danger hidden">✂ Verschieben durchführen</button>
         </div>
         <div id="reorg-summary" class="muted"></div>
@@ -290,6 +291,11 @@
             <button id="ask-send" class="ask-send">Los</button>
           </div>
           <div class="ask-foot" id="ask-foot">Geerdet in deiner Mediathek · [n] = Quelle</div>
+        </div>
+        <div class="ask-examples">
+          <span class="muted">z. B.:</span>
+          <button class="ask-attach-chip" data-ask-ex="Lade 5 beliebte AI-generierte Lieder von YouTube herunter und sag mir, welche es sind">🎵 Beliebte AI-Lieder von YouTube laden</button>
+          <button class="ask-attach-chip" data-ask-ex="Finde in meiner Bibliothek meinen meistgespielten Künstler und lade 3 ähnliche aktuelle Lieder von ihm von YouTube herunter">🔁 Ähnliche Lieder zu meiner Bibliothek</button>
         </div>
       </div>
     </section>

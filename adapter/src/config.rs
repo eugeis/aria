@@ -36,6 +36,10 @@ pub struct ServerConfig {
     /// Web-app login token for the `/dl/*` API (env ARIA_WEB_TOKEN).
     /// None = open access (dev only).
     pub web_token: Option<String>,
+    /// Bearer token for the MCP endpoint /dl/mcp (env ARIA_MCP_TOKEN) —
+    /// the brain's MCP client presents it; None = the endpoint is
+    /// disabled (auth can never be satisfied, it answers 401).
+    pub mcp_token: Option<String>,
 }
 
 /// The user's media collections: one or more folders, each with a kind.
@@ -137,6 +141,7 @@ impl Default for ServerConfig {
             tls_key: None,
             data_dir: None,
             web_token: None,
+            mcp_token: None,
         }
     }
 }
@@ -292,6 +297,11 @@ fn apply_env(mut cfg: Config) -> Config {
     if let Ok(t) = std::env::var("ARIA_WEB_TOKEN") {
         if !t.is_empty() {
             cfg.server.web_token = Some(t);
+        }
+    }
+    if let Ok(t) = std::env::var("ARIA_MCP_TOKEN") {
+        if !t.is_empty() {
+            cfg.server.mcp_token = Some(t);
         }
     }
     cfg

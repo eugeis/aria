@@ -21,6 +21,7 @@ use tracing_subscriber::EnvFilter;
 mod agent;
 mod config;
 mod enrich;
+mod mcp_dl;
 mod music;
 mod reorg;
 mod router;
@@ -234,7 +235,15 @@ async fn run_serve(cfg: config::Config) -> anyhow::Result<()> {
     // The web app (the SPA + the /dl download API) runs in this container;
     // it owns `/`, while the Alexa/stream endpoints stay as before.
     web::spawn_worker(state.clone());
+    // The MCP surface for the brain's assistant agent (POST /dl/mcp):
+    // bearer-gated with ARIA_MCP_TOKEN (empty token = endpoint disabled,
+    // it answers 401 to everything).
+    let mcp = mcp_dl::AuthMcp {
+        inner: mcp_dl::mcp_service(state.clone()),
+        token: state.cfg.server.mcp_token.clone().unwrap_or_default(),
+    };
     let app = Router::new()
+        .route_service("/dl/mcp", mcp)
         .route("/alexa", axum::routing::post(stream::handle_alexa))
         .route("/stream/{token}", get(stream::handle_stream))
         .route("/art/{id}", get(stream::handle_art))

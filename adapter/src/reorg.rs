@@ -36,10 +36,13 @@ use crate::state::AppState;
 // ---------------------------------------------------------------------------
 
 /// The grouping hierarchy for a music layout. Levels are fixed in the
-/// order language → genre → artist → album; the user picks which levels to
-/// include (the preset names map onto combinations). `flat` = every file
-/// straight into the collection root; an empty non-flat layout = Keep
-/// (report only, no moves).
+/// order artist → album → language → genre (artist-first: the language
+/// level used to lead, which scattered every artist's albums across
+/// language folders — the owner asked for artist/album as the primary
+/// structure with language as the secondary level); the user picks which
+/// levels to include (the preset names map onto combinations). `flat` =
+/// every file straight into the collection root; an empty non-flat layout
+/// = Keep (report only, no moves).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub struct Layout {
     pub language: bool,
@@ -57,8 +60,8 @@ impl Layout {
         !self.language && !self.genre && !self.artist && !self.album
     }
 
-    /// "language-genre-artist-album[-loose]" / the legacy presets
-    /// (artist-album, artist-flat, flat, keep).
+    /// "artist-album-language-genre[-loose]" (the canonical level order) /
+    /// the legacy presets (artist-album, flat, keep).
     pub fn parse(s: &str) -> Option<Layout> {
         let mut l = Layout::default();
         for part in s.trim().to_ascii_lowercase().split(['-', '_', ',', ' ']) {
@@ -93,17 +96,17 @@ impl Layout {
             return "keep".to_string();
         }
         let mut v = Vec::new();
-        if self.language {
-            v.push("language");
-        }
-        if self.genre {
-            v.push("genre");
-        }
         if self.artist {
             v.push("artist");
         }
         if self.album {
             v.push("album");
+        }
+        if self.language {
+            v.push("language");
+        }
+        if self.genre {
+            v.push("genre");
         }
         if self.loose {
             v.push("loose");
@@ -308,23 +311,9 @@ fn target_of(
     // file-name part gets the same safety pass as folder names.
     let base = sanitize(&raw);
     let name = format!("{nn} - {base}.{ext}");
+    // Level order (artist-first — see the Layout docs): artist → album →
+    // language → genre.
     let mut segs = Vec::new();
-    if layout.language {
-        segs.push(if t.language.trim().is_empty() {
-            "Unsortiert".to_string()
-        } else {
-            lang_display(&t.language)
-        });
-    }
-    if layout.genre {
-        // Placeholder/junk genres ("Favorite Music", "Other", …) share the
-        // `Sonstige` bucket.
-        segs.push(if needs_work(&t.genre) {
-            "Sonstige".to_string()
-        } else {
-            sanitize(&t.genre)
-        });
-    }
     if layout.artist {
         // RAW tag value (never the folder fallback — the fallback would
         // read the layout's own folders, e.g. the language level, as
@@ -346,6 +335,22 @@ fn target_of(
             "Lose Titel".to_string()
         } else {
             sanitize(&t.album_raw)
+        });
+    }
+    if layout.language {
+        segs.push(if t.language.trim().is_empty() {
+            "Unsortiert".to_string()
+        } else {
+            lang_display(&t.language)
+        });
+    }
+    if layout.genre {
+        // Placeholder/junk genres ("Favorite Music", "Other", …) share the
+        // `Sonstige` bucket.
+        segs.push(if needs_work(&t.genre) {
+            "Sonstige".to_string()
+        } else {
+            sanitize(&t.genre)
         });
     }
     (segs, name)
@@ -656,7 +661,7 @@ pub fn plan(
 
 /// Empty OR placeholder-junk ("~1", "??", "Kein Künstler" — no real letters
 /// / a known placeholder) = the field needs catalog work.
-fn needs_work(s: &str) -> bool {
+pub fn needs_work(s: &str) -> bool {
     let n = s.trim();
     if n.is_empty() {
         return true;
@@ -877,7 +882,7 @@ fn admin_only(u: &crate::web::WebUser) -> Option<Response> {
 
 #[derive(Deserialize)]
 struct PlanQuery {
-    /// The grouping levels ("language-genre-artist-album") — wins over
+    /// The grouping levels ("artist-album-language") — wins over
     /// `style` (the legacy preset names still work).
     #[serde(default)]
     layout: Option<String>,
@@ -907,7 +912,7 @@ async fn handle_plan(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"ok": false, "error": format!("unknown layout `{spec}` (e.g. language-genre-artist-album, artist-album, flat, keep)")})),
+                Json(serde_json::json!({"ok": false, "error": format!("unknown layout `{spec}` (e.g. artist-album-language, artist-album, flat, keep)")})),
             )
                 .into_response();
         }
@@ -957,7 +962,7 @@ async fn handle_apply(
     let Some(layout) = Layout::parse(&body.layout) else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"ok": false, "error": format!("unknown layout `{}` (e.g. language-genre-artist-album, artist-album, flat, keep)", body.layout)})),
+            Json(serde_json::json!({"ok": false, "error": format!("unknown layout `{}` (e.g. artist-album-language, artist-album, flat, keep)", body.layout)})),
         )
             .into_response();
     };
@@ -1242,19 +1247,21 @@ mod tests {
     fn layout_parses_levels_and_presets() {
         let l = Layout::parse("language-genre-artist-album").unwrap();
         assert!(l.language && l.genre && l.artist && l.album && !l.flat);
-        assert_eq!(l.as_str(), "language-genre-artist-album");
+        // parse accepts ANY order; as_str() emits the canonical order
+        // (artist-first).
+        assert_eq!(l.as_str(), "artist-album-language-genre");
         let l = Layout::parse("artist-album").unwrap();
         assert!(!l.language && !l.genre && l.artist && l.album);
         let l = Layout::parse("flat").unwrap();
         assert!(l.flat);
         assert_eq!(l.as_str(), "flat");
         assert_eq!(Layout::parse("keep").unwrap().as_str(), "keep");
-        assert!(Layout::parse("language-artist").unwrap().as_str() == "language-artist");
+        assert!(Layout::parse("language-artist").unwrap().as_str() == "artist-language");
         assert!(Layout::parse("bogus").is_none());
         // the loose flag round-trips as a trailing token
         let l = Layout::parse("language-genre-artist-album-loose").unwrap();
         assert!(l.loose);
-        assert_eq!(l.as_str(), "language-genre-artist-album-loose");
+        assert_eq!(l.as_str(), "artist-album-language-genre-loose");
         assert!(!Layout::parse("artist-album").unwrap().loose);
     }
 
@@ -1341,6 +1348,56 @@ mod tests {
         assert_eq!(p_loose.moves.len(), 1, "{:?}", p_loose.moves);
         assert_eq!(p_loose.moves[0].from, "Alpha/Only/01 - x.mp3");
         assert_eq!(p_loose.moves[0].to, "Alpha/Lose Titel/01 - x.mp3");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The owner's requested hierarchy: artist/album as the primary
+    /// structure, language as the SECONDARY level (language used to lead,
+    /// scattering every artist across language folders).
+    #[test]
+    fn order_is_artist_then_album_then_language() {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-reorg-order-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = dir.join("musik");
+        let p = root.join("01 - x.mp3"); // misplaced: at the collection root
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&p, minimal_mp3()).unwrap();
+        aria_audio::set_tags(
+            &p,
+            &aria_audio::TagEdit {
+                title: Some("x".into()),
+                artist: Some("Alpha".into()),
+                album: Some("Pair".into()),
+                language: Some("deu|G".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let items = [aria_audio::CollectionItem {
+            name: "musik".into(),
+            kind: CollectionKind::Music,
+            path: root.clone(),
+        }];
+        let lib = aria_audio::Library::scan_collections(&items).unwrap();
+        let plan = plan(
+            &lib,
+            &root,
+            "musik",
+            &Layout {
+                artist: true,
+                album: true,
+                language: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(plan.moves.len(), 1, "{:?}", plan.moves);
+        assert_eq!(plan.moves[0].to, "Alpha/Pair/Deutsch/01 - x.mp3");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

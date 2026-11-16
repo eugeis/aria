@@ -49,6 +49,14 @@ pub struct EnrichEntry {
     pub art_b64: String,
     #[serde(default)]
     pub art_mime: String,
+    /// Artist (interpreter) art — the fallback for albums without a cover
+    /// and the image for artist-only entries (loose tracks, no album).
+    #[serde(default)]
+    pub art_artist_b64: String,
+    #[serde(default)]
+    pub art_artist_mime: String,
+    #[serde(default)]
+    pub artist_mbid: String,
     /// A human note when the search failed or found no art.
     #[serde(default)]
     pub note: String,
@@ -110,6 +118,16 @@ impl EnrichState {
                 .join("covers")
                 .join(format!("{}.{}", sanitize_name(&entry.key), ext));
             if let Ok(bytes) = base64_decode(&entry.art_b64) {
+                std::fs::write(&file, bytes).ok();
+            }
+        }
+        if !entry.art_artist_b64.is_empty() {
+            let ext = if entry.art_artist_mime.contains("png") { "png" } else { "jpg" };
+            let file = self
+                .data_dir
+                .join("covers")
+                .join(format!("{}_artist.{}", sanitize_name(&entry.key), ext));
+            if let Ok(bytes) = base64_decode(&entry.art_artist_b64) {
                 std::fs::write(&file, bytes).ok();
             }
         }
@@ -214,41 +232,71 @@ async fn handle_plan(
         .cloned()
         .unwrap_or_else(|| "musik".into());
     // The std library guard is !Send — scope it so it never lives across
-    // the tokio await below.
-    let by_album: std::collections::BTreeMap<(String, String), (String, usize, bool)> = {
+    // the tokio await below. Two candidate pools: real (artist, album)
+    // pairs, and artists with LOOSE tracks (no usable album) whose art
+    // candidate is the interpreter image.
+    let (by_album, by_artist): (
+        std::collections::BTreeMap<(String, String), (String, usize, bool)>,
+        std::collections::BTreeMap<String, (usize, bool)>,
+    ) = {
         let lib = state.library.read().unwrap();
         let mut m = std::collections::BTreeMap::new();
+        let mut a = std::collections::BTreeMap::new();
         for t in lib.iter() {
             if t.collection != collection || t.kind != aria_audio::CollectionKind::Music {
                 continue;
             }
-            if t.artist.trim().is_empty() || t.album.trim().is_empty() {
+            if t.artist.trim().is_empty() {
                 continue;
             }
-            let e = m
-                .entry((t.artist.trim().to_string(), t.album.trim().to_string()))
-                .or_insert_with(|| (t.year.trim().to_string(), 0, false));
-            e.1 += 1;
-            e.2 = e.2 || t.cover.is_some();
+            let album = t.album.trim();
+            if album.is_empty() || crate::reorg::needs_work(album) {
+                let e = a.entry(t.artist.trim().to_string()).or_insert((0, false));
+                e.0 += 1;
+                e.1 = e.1 || t.cover.is_some();
+            } else {
+                let e = m
+                    .entry((t.artist.trim().to_string(), album.to_string()))
+                    .or_insert_with(|| (t.year.trim().to_string(), 0, false));
+                e.1 += 1;
+                e.2 = e.2 || t.cover.is_some();
+            }
         }
-        m
+        (m, a)
     };
     let cache = state.enrich.cache.lock().await;
-    let albums: Vec<serde_json::Value> = by_album
+    let cached_has_art = |key: &str| {
+        cache
+            .get(key)
+            .map(|e| !e.art_b64.is_empty() || !e.art_artist_b64.is_empty())
+            .unwrap_or(false)
+    };
+    let mut albums: Vec<serde_json::Value> = by_album
         .into_iter()
         .map(|((artist, album), (year, n, has_art))| {
             let key = format!("{collection}|{artist}|{album}");
-            let cached_art = cache.get(&key).map(|e| !e.art_b64.is_empty()).unwrap_or(false);
             serde_json::json!({
                 "key": key,
                 "artist": artist,
                 "album": album,
                 "year": year,
                 "tracks": n,
-                "has_art": has_art || cached_art,
+                "has_art": has_art || cached_has_art(&key),
             })
         })
         .collect();
+    for (artist, (n, has_art)) in by_artist {
+        let key = format!("{collection}|{artist}|");
+        albums.push(serde_json::json!({
+            "key": key,
+            "artist": artist,
+            "album": "",
+            "kind": "artist",
+            "year": "",
+            "tracks": n,
+            "has_art": has_art || cached_has_art(&key),
+        }));
+    }
     Json(serde_json::json!({"ok": true, "albums": albums})).into_response()
 }
 
@@ -308,7 +356,11 @@ async fn handle_lookup(
         )
             .into_response();
     }
-    let entry = do_lookup(&state.enrich, &key, &collection, &body.artist, &body.album).await;
+    let entry = if body.album.trim().is_empty() {
+        do_artist_lookup(&state.enrich, &key, &body.artist).await
+    } else {
+        do_lookup(&state.enrich, &key, &collection, &body.artist, &body.album).await
+    };
     state.enrich.busy.store(false, Ordering::SeqCst);
     state.enrich.persist(&entry).await;
     Json(serde_json::json!({"ok": true, "cached": false, "entry": entry})).into_response()
@@ -333,6 +385,9 @@ async fn do_lookup(
         mbid: String::new(),
         art_b64: String::new(),
         art_mime: String::new(),
+        art_artist_b64: String::new(),
+        art_artist_mime: String::new(),
+        artist_mbid: String::new(),
         note: String::new(),
         updated_at: now_secs(),
     };
@@ -461,13 +516,43 @@ async fn do_lookup(
         .and_then(|i| i.as_str())
         .unwrap_or("");
 
-    // 2) Cover Art Archive front image (release group first — it covers
-    //    all editions — then the release itself; one retry per source).
+    // 2) Cover Art Archive front image, best available size (see
+    //    fetch_front); release group first — it covers all editions —
+    //    then the release itself.
     for base in [
         format!("{CAA_BASE}/release-group/{rgid}"),
         format!("{CAA_BASE}/release/{}", entry.mbid),
     ] {
-        let url = format!("{base}/front-500");
+        if let Some((b64, mime)) = fetch_front(enrich, &base).await {
+            entry.art_b64 = b64;
+            entry.art_mime = mime;
+            break;
+        }
+    }
+    // 3) No album cover: fall back to the artist's image (the
+    //    interpreter cover — also the candidate for album-less tracks).
+    if entry.art_b64.is_empty() {
+        fetch_artist_art(enrich, &mut entry).await;
+    }
+    if entry.art_b64.is_empty() && entry.art_artist_b64.is_empty() && entry.note.is_empty() {
+        entry.note = "kein Cover beim Cover Art Archive".into();
+    }
+    entry
+}
+
+/// One CAA base (release-group / release / artist) → the best available
+/// front image. Ladder: the ORIGINAL within the cap first (real album
+/// scans are 3000px+ — the old hard 500px cap was the quality ceiling),
+/// then the fixed sizes largest-first. A 404 or an out-of-cap image steps
+/// down; one network retry per size.
+async fn fetch_front(enrich: &EnrichState, base: &str) -> Option<(String, String)> {
+    const LADDER: &[(&str, usize, usize)] = &[
+        ("", 8 * 1024, 8 * 1024 * 1024),
+        ("-1200", 8 * 1024, 8 * 1024 * 1024),
+        ("-500", 8 * 1024, 8 * 1024 * 1024),
+    ];
+    for (suffix, min, max) in LADDER {
+        let url = format!("{base}/front{suffix}");
         'retry: for _attempt in 0..2 {
             enrich.pace().await;
             match enrich.client.get(&url).send().await {
@@ -479,30 +564,111 @@ async fn do_lookup(
                         .unwrap_or("image/jpeg")
                         .to_string();
                     if let Ok(bytes) = r.bytes().await {
-                        if (8 * 1024..=8 * 1024 * 1024).contains(&bytes.len()) {
-                            entry.art_b64 = base64_encode(&bytes);
-                            entry.art_mime = mime;
+                        if (*min..=*max).contains(&bytes.len()) {
+                            return Some((base64_encode(&bytes), mime));
                         }
                     }
-                    break 'retry;
+                    break 'retry; // usable size miss → step down the ladder
                 }
-                Ok(_) => break 'retry, // 404 — try the next source
-                Err(e) => {
-                    if entry.art_b64.is_empty() {
-                        entry.note = format!("Cover Art error: {e}");
-                    }
+                Ok(_) => break 'retry, // 404 → step down
+                Err(_) => {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue 'retry;
                 }
             }
         }
-        if !entry.art_b64.is_empty() {
-            break;
+    }
+    None
+}
+
+/// MusicBrainz artist search + the artist's CAA image into the entry
+/// (the interpreter cover). `release_artist` carries the matched name so
+/// the preview can show what the image belongs to.
+async fn fetch_artist_art(enrich: &EnrichState, entry: &mut EnrichEntry) {
+    let artist = entry.artist.trim();
+    if artist.is_empty() {
+        return;
+    }
+    let url = format!(
+        "{MB_BASE}/artist/?query={}&fmt=json&limit=5",
+        urlencoded(&format!(r#"artist:"{artist}""#))
+    );
+    let mut artists: Vec<serde_json::Value> = Vec::new();
+    for _attempt in 0..2 {
+        enrich.pace().await;
+        match enrich.client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => {
+                artists = r
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|v| v.get("artists").and_then(|a| a.as_array()).cloned())
+                    .unwrap_or_default();
+                break;
+            }
+            Ok(r) if r.status().is_client_error() => break,
+            _ => {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
         }
     }
-    if entry.art_b64.is_empty() && entry.note.is_empty() {
-        entry.note = "kein Cover beim Cover Art Archive".into();
+    let best = artists
+        .iter()
+        .filter_map(|a| {
+            let name = a.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if word_overlap(artist, name) >= 0.5 {
+                Some(a)
+            } else {
+                None
+            }
+        })
+        .max_by(|a, b| {
+            let name = |x: &serde_json::Value| {
+                x.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string()
+            };
+            word_overlap(artist, &name(a)).partial_cmp(&word_overlap(artist, &name(b))).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    let Some(a) = best else {
+        if entry.note.is_empty() {
+            entry.note = "kein MusicBrainz-Künstler-Treffer".into();
+        }
+        return;
+    };
+    entry.artist_mbid = a.get("id").and_then(|i| i.as_str()).unwrap_or("").into();
+    if entry.release_artist.is_empty() {
+        entry.release_artist = a.get("name").and_then(|n| n.as_str()).unwrap_or("").into();
     }
+    if let Some((b64, mime)) =
+        fetch_front(enrich, &format!("{CAA_BASE}/artist/{}", entry.artist_mbid)).await
+    {
+        entry.art_artist_b64 = b64;
+        entry.art_artist_mime = mime;
+        entry.found = true;
+    }
+}
+
+/// Artist-only lookup (empty album in the request): the interpreter image
+/// straight, no release search.
+async fn do_artist_lookup(enrich: &EnrichState, key: &str, artist: &str) -> EnrichEntry {
+    let mut entry = EnrichEntry {
+        key: key.to_string(),
+        artist: artist.to_string(),
+        album: String::new(),
+        found: false,
+        score: 0.0,
+        release_title: String::new(),
+        release_artist: String::new(),
+        year: String::new(),
+        mbid: String::new(),
+        art_b64: String::new(),
+        art_mime: String::new(),
+        art_artist_b64: String::new(),
+        art_artist_mime: String::new(),
+        artist_mbid: String::new(),
+        note: String::new(),
+        updated_at: now_secs(),
+    };
+    fetch_artist_art(enrich, &mut entry).await;
     entry
 }
 
@@ -549,25 +715,45 @@ async fn handle_apply(
             }
         }
     }
-    // 2) Resolve the tracks of each album (std guard, scoped — no await
-    //    inside: the guard is !Send).
+    // 2) Resolve the tracks of each entry (std guard, scoped — no await
+    //    inside: the guard is !Send). Album entries embed the ALBUM cover
+    //    into all of the album's tracks; artist entries (empty album)
+    //    embed the INTERPRETER image into the loose tracks only — an
+    //    embedded album cover must never be replaced by the artist art.
     let mut jobs: Vec<(EnrichEntry, Vec<(String, String)>)> = Vec::new();
     {
         let lib = state.library.read().unwrap();
         for e in entries {
-            if e.art_b64.is_empty() {
-                errors.push(format!("{}: kein Cover im Cache", e.album));
+            let artist_entry = e.album.trim().is_empty();
+            let art_b64 = if artist_entry {
+                e.art_artist_b64.clone()
+            } else {
+                e.art_b64.clone()
+            };
+            if art_b64.is_empty() {
+                errors.push(format!(
+                    "{}: kein Cover im Cache",
+                    if artist_entry { e.artist.clone() } else { e.album.clone() }
+                ));
                 continue;
             }
             let tracks: Vec<(String, String)> = lib
                 .iter()
                 .filter(|t| {
-                    t.artist.trim() == e.artist.trim() && t.album.trim() == e.album.trim()
+                    t.artist.trim() == e.artist.trim()
+                        && if artist_entry {
+                            t.album.trim().is_empty() || crate::reorg::needs_work(&t.album)
+                        } else {
+                            t.album.trim() == e.album.trim()
+                        }
                 })
                 .map(|t| (t.path.clone(), t.title.clone()))
                 .collect();
             if tracks.is_empty() {
-                errors.push(format!("{}: keine Tracks gefunden", e.album));
+                errors.push(format!(
+                    "{}: keine Tracks gefunden",
+                    if artist_entry { e.artist.clone() } else { e.album.clone() }
+                ));
                 continue;
             }
             jobs.push((e, tracks));
@@ -577,17 +763,23 @@ async fn handle_apply(
     let mut applied = 0usize;
     let mut files = 0usize;
     for (e, tracks) in &jobs {
-        let Ok(art) = base64_decode(&e.art_b64) else {
+        let (art_b64, mime) = if e.album.trim().is_empty() {
+            (&e.art_artist_b64, &e.art_artist_mime)
+        } else {
+            (&e.art_b64, &e.art_mime)
+        };
+        let Ok(art) = base64_decode(art_b64) else {
             errors.push(format!("{}: Cover dekodieren fehlgeschlagen", e.album));
             continue;
         };
         for (path, title) in tracks {
-            if let Err(err) = aria_audio::set_cover(std::path::Path::new(path), &art, &e.art_mime)
-            {
+            if let Err(err) = aria_audio::set_cover(std::path::Path::new(path), &art, mime) {
                 errors.push(format!("{title}: {err}"));
                 continue;
             }
-            if body.update_year && !e.year.is_empty() {
+            // The year is an ALBUM fact (the release date) — never written
+            // from an artist entry.
+            if body.update_year && !e.year.is_empty() && !e.album.trim().is_empty() {
                 let _ = aria_audio::set_tags(
                     std::path::Path::new(path),
                     &aria_audio::TagEdit {
@@ -622,20 +814,32 @@ async fn handle_cached_art(
         return crate::web::denied();
     }
     let cache = state.enrich.cache.lock().await;
+    // The album cover wins; the interpreter image is the fallback (both
+    // the live preview and the art chain of loose tracks use this URL).
     match cache.get(&key) {
-        Some(e) if !e.art_b64.is_empty() => {
-            let bytes = base64_decode(&e.art_b64).unwrap_or_default();
+        Some(e) => {
+            let (b64, mime) = if !e.art_b64.is_empty() {
+                (&e.art_b64, &e.art_mime)
+            } else if !e.art_artist_b64.is_empty() {
+                (&e.art_artist_b64, &e.art_artist_mime)
+            } else {
+                return (StatusCode::NOT_FOUND, "no cached art").into_response();
+            };
+            let bytes = base64_decode(b64).unwrap_or_default();
             (
                 StatusCode::OK,
                 [
-                    (axum::http::header::CONTENT_TYPE, e.art_mime.clone()),
-                    (axum::http::header::CACHE_CONTROL, "max-age=86400".to_string()),
+                    (
+                        axum::http::header::CONTENT_TYPE,
+                        if mime.is_empty() { "image/jpeg" } else { mime.as_str() },
+                    ),
+                    (axum::http::header::CACHE_CONTROL, "max-age=86400"),
                 ],
                 bytes,
             )
                 .into_response()
         }
-        _ => (StatusCode::NOT_FOUND, "no cached art").into_response(),
+        None => (StatusCode::NOT_FOUND, "no cached art").into_response(),
     }
 }
 

@@ -1300,6 +1300,9 @@ body.offline-mode .searchbox input { border-color: #7a5f22; }
 }
 .ask-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .ask-chips:empty { display: none; margin: 0; }
+.ask-examples { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.ask-examples .ask-attach-chip { cursor: pointer; color: var(--muted); }
+.ask-examples .ask-attach-chip:hover { color: var(--text); border-color: var(--accent); }
 .ask-attach-chip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
   padding: 4px 10px; border-radius: 999px; background: var(--panel2);

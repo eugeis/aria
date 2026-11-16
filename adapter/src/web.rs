@@ -475,7 +475,7 @@ fn ytdlp_bin() -> Result<PathBuf, String> {
 }
 
 #[derive(Serialize, Clone)]
-struct Hit {
+pub(crate) struct Hit {
     id: String,
     title: String,
     duration: Option<u32>,
@@ -487,7 +487,7 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(|s| s.to_string())
 }
 
-fn hits_from_entries(v: &Value) -> Vec<Hit> {
+pub(crate) fn hits_from_entries(v: &Value) -> Vec<Hit> {
     let entries = match v.get("entries").and_then(|e| e.as_array()) {
         Some(e) => e,
         None => return vec![entry_to_hit(v)],
@@ -524,7 +524,7 @@ fn entry_to_hit_opt(v: &Value) -> Option<Hit> {
     })
 }
 
-async fn yt_flat_json(cfg: &Config, target: &str) -> Result<Value, String> {
+pub(crate) async fn yt_flat_json(cfg: &Config, target: &str) -> Result<Value, String> {
     let bin = ytdlp_bin()?;
     let mut cmd = tokio::process::Command::new(&bin);
     cmd.arg("--no-warnings")

@@ -458,16 +458,17 @@ $("pp-close").addEventListener("click", () => {
 
 let reorgState = { plan: null, suggestions: [], accepted: new Set() };
 
-// The layout the user checks in the Organizer (fixed order: language →
-// genre → artist → album). No box = keep the current layout (report only).
-// "Lose Titel bündeln" appends the loose flag (one-track albums collapse
-// into a per-artist folder; junk artist names share "Unsortiert").
+// The layout the user checks in the Organizer (fixed order: artist →
+// album → language → genre — artist-first, the language level no longer
+// leads). No box = keep the current layout (report only). "Lose Titel
+// bündeln" appends the loose flag (one-track albums collapse into a
+// per-artist folder; junk artist names share "Unsortiert").
 function reorgLayoutSpec() {
   const dims = [
-    $("ro-lang").checked ? "language" : null,
-    $("ro-genre").checked ? "genre" : null,
     $("ro-artist").checked ? "artist" : null,
     $("ro-album").checked ? "album" : null,
+    $("ro-lang").checked ? "language" : null,
+    $("ro-genre").checked ? "genre" : null,
   ].filter(Boolean);
   if (!dims.length) return "keep";
   if ($("ro-loose").checked) dims.push("loose");
@@ -601,6 +602,59 @@ $("reorg-dupes").addEventListener("click", async (e) => {
 });
 
 $("reorg-plan").addEventListener("click", doReorgPlan);
+
+// One-click organize: plan + apply without the preview gate (the owner
+// asked to "reorder without asking"). Same moves, same id-stability; the
+// Vorschau path stays available for a dry run.
+$("reorg-auto").addEventListener("click", async () => {
+  if (isReadOnly()) return toast("Nur Lesezugriff — Organisieren ist admin-only", true);
+  await loadReorgCollections();
+  const col = $("reorg-collection").value;
+  if (!col) return toast("Keine Sammlung konfiguriert", true);
+  const spec = reorgLayoutSpec();
+  if (spec === "keep") return toast("Mind. eine Ebene ankreuzen (z. B. Künstler + Album)", true);
+  const btn = $("reorg-auto");
+  btn.disabled = true;
+  const box = $("reorg-summary");
+  try {
+    box.textContent = "Plane …";
+    const pr = await api(`/dl/reorg/plan?layout=${encodeURIComponent(spec)}&collection=${encodeURIComponent(col)}`);
+    const p = (pr.plans || [])[0];
+    if (!p) return (box.textContent = "Keine Sammlung gefunden.");
+    reorgState.plan = p;
+    reorgState.suggestions = [];
+    reorgState.accepted.clear();
+    if (!p.moves.length) {
+      box.textContent = `Layout ${p.layout}: alles ist schon im Ziellayout. · ${p.duplicates.length} Duplikat-Gruppen`;
+      renderDupes(p.duplicates);
+      $("reorg-moves").innerHTML = `<p class="muted">Alles ist schon im Ziellayout.</p>`;
+      return;
+    }
+    box.textContent = `Verschiebe ${p.moves.length} Dateien (${(p.move_bytes / 1048576).toFixed(1)} MB) …`;
+    const r = await api("/dl/reorg/apply", {
+      method: "POST",
+      body: JSON.stringify({ layout: spec, collection: col }),
+    });
+    if (r.ok) {
+      box.textContent =
+        `Layout ${p.layout}: ${r.moved} Dateien verschoben (${((r.bytes || 0) / 1048576).toFixed(1)} MB)` +
+        (r.failed?.length ? ` · ${r.failed.length} fehlgeschlagen` : "") +
+        (r.reindex ? " · Reindex gestartet" : "");
+      toast(`${r.moved} Dateien neu sortiert${r.failed?.length ? ` · ${r.failed.length} fehlgeschlagen` : ""}`);
+      if (r.failed?.length) console.warn(r.failed);
+    } else {
+      box.textContent = "";
+      toast(r.error || "Organisieren fehlgeschlagen", true);
+    }
+    await doReorgPlan();
+    loadLibrary();
+  } catch (err) {
+    box.textContent = "";
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 $("reorg-apply").addEventListener("click", async () => {
   const p = reorgState.plan;
@@ -1231,6 +1285,14 @@ function askRenderChips() {
     `<span class="ask-attach-chip">📄 ${esc(f.name)} <span class="x" data-ask-del="${i}">×</span></span>`
   ).join("");
 }
+// Example prompts: fill the composer (the AI YouTube-download flows).
+document.querySelector(".ask-examples").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ask-ex]");
+  if (!b) return;
+  const t = $("ask-text");
+  t.value = b.dataset.askEx;
+  t.focus();
+});
 async function askLoadTools() {
   if (askToolDefs) return;
   try {
@@ -1341,10 +1403,13 @@ function tileify(img, name) {
   img.replaceWith(d);
 }
 
-function albumArtSrcs(album, key) {
+// The full art chain: embedded art → the enrichment cache (album key —
+// the server answers the interpreter image as its fallback; for loose
+// tracks the artist key, album left empty) → the gradient tile (artFall).
+function artSrcs(artId, artist, album) {
   const srcs = [];
-  if (album.art_id) srcs.push(`/art/${album.art_id}`);
-  if (key) srcs.push(`/art/cache/${encodeURIComponent(key)}`);
+  if (artId) srcs.push(`/art/${artId}`);
+  if (artist) srcs.push(`/art/cache/${encodeURIComponent(`musik|${artist}|${album || ""}`)}`);
   return srcs;
 }
 
@@ -1411,7 +1476,7 @@ function renderHome() {
         cardHtml({
           name: a.name,
           sub: `${trackCount(a)} Titel`,
-          art: a.art_id ? artImgHtml(a.name, [`/art/${a.art_id}`]) : null,
+          art: artImgHtml(a.name, artSrcs(a.art_id, a.name, "")),
           play: artistIds(a).join(","),
           data: `artist:${encodeURIComponent(a.name)}`,
         })
@@ -1523,9 +1588,7 @@ function genreCards(musik, genre) {
     cardHtml({
       name: al.album || "(ohne Album)",
       sub: `${al.lang} · ${al.artist}`,
-      art: (al.tracks.find((t) => t.has_art) || {}).has_art
-        ? artImgHtml(al.album, [`/art/${al.tracks.find((t) => t.has_art).id}`])
-        : null,
+      art: artImgHtml(al.album || al.artist, artSrcs((al.tracks.find((t) => t.has_art) || {}).id, al.artist, al.album)),
       play: al.tracks.map((t) => t.id).join(","),
       data: `album:${encodeURIComponent(al.artist)}¦${encodeURIComponent(al.album)}`,
     })
@@ -1541,7 +1604,7 @@ function drillCards(musik) {
       cardHtml({
         name: a.name,
         sub: `${trackCount(a)} Titel · ${a.albums.length} Alben`,
-        art: a.art_id ? artImgHtml(a.name, [`/art/${a.art_id}`]) : null,
+        art: artImgHtml(a.name, artSrcs(a.art_id, a.name, "")),
         play: artistIds(a).join(","),
         data: `artist:${encodeURIComponent(a.name)}`,
       })
@@ -1565,9 +1628,7 @@ function drillCards(musik) {
       cardHtml({
         name: al.album || "(ohne Album)",
         sub: al.artist,
-        art: (al.tracks.find((t) => t.has_art) || {}) .has_art
-          ? artImgHtml(al.album, [`/art/${al.tracks.find((t) => t.has_art).id}`])
-          : null,
+        art: artImgHtml(al.album || al.artist, artSrcs((al.tracks.find((t) => t.has_art) || {}).id, al.artist, al.album)),
         play: al.tracks.map((t) => t.id).join(","),
         data: `album:${encodeURIComponent(al.artist)}¦${encodeURIComponent(al.album)}`,
       })
@@ -1621,7 +1682,7 @@ function openAlbum(artist, album) {
   $("library-drill").classList.add("hidden");
   $("album-view").classList.remove("hidden");
   const ids = al.tracks.map((t) => t.id).join(",");
-  const art = al.art_id ? artImgHtml(album, [`/art/${al.art_id}`, `/art/cache/${encodeURIComponent("musik|"+artist+"|"+album)}`]) : null;
+  const art = artImgHtml(album, artSrcs(al.art_id, artist, album));
   $("album-hero").innerHTML = `
     <div class="al-cover">${art || `<div class="card-art tile" style="background:${tileColor(album)}">${album.charAt(0).toUpperCase()}</div>`}</div>
     <div class="al-meta">
@@ -1740,7 +1801,7 @@ function openArtistAlbums(artist) {
       cardHtml({
         name: al.name || "(ohne Album)",
         sub: al.year || `${al.tracks.length} Titel`,
-        art: al.art_id ? artImgHtml(al.name, [`/art/${al.art_id}`]) : null,
+        art: artImgHtml(al.name || a.name, artSrcs(al.art_id, a.name, al.name)),
         play: al.tracks.map((t) => t.id).join(","),
         data: `album:${encodeURIComponent(a.name)}¦${encodeURIComponent(al.name)}`,
       })
@@ -2479,22 +2540,36 @@ function renderEnrichList() {
     .join("");
 }
 
+// The entry's usable image: the album cover, else the interpreter image
+// (artist entries + albums without a cover).
+function enrichEntryArt(a) {
+  if (!a.entry) return null;
+  if (a.entry.art_b64) return { b64: a.entry.art_b64, mime: a.entry.art_mime || "image/jpeg" };
+  if (a.entry.art_artist_b64) return { b64: a.entry.art_artist_b64, mime: a.entry.art_artist_mime || "image/jpeg" };
+  return null;
+}
+
 function enrichRowHtml(a, i) {
   const done = a.state === "done";
-  const hasArt = done && a.entry && a.entry.art_b64;
-  const art = hasArt
-    ? `<img class="en-art" src="data:${a.entry.art_mime || "image/jpeg"};base64,${a.entry.art_b64}" alt="">`
-    : `<div class="en-art none" style="background:${tileColor(a.album)}">${esc((a.album || "?").charAt(0).toUpperCase())}</div>`;
+  const isArtist = a.kind === "artist" || !a.album;
+  const label = isArtist ? a.artist : a.album;
+  const img = done ? enrichEntryArt(a) : null;
+  const hasArt = !!img;
+  const art = img
+    ? `<img class="en-art" src="data:${img.mime};base64,${img.b64}" alt="">`
+    : `<div class="en-art none" style="background:${tileColor(label)}">${esc((label || "?").charAt(0).toUpperCase())}</div>`;
   let match;
   if (a.state === "busy") match = `<span class="muted">suche …</span>`;
   else if (done && a.entry && a.entry.found)
-    match = `<span class="muted">MusicBrainz: ${esc(a.entry.release_title || a.album)}${a.entry.year ? " · " + esc(a.entry.year) : ""} <small>(${Number(a.entry.score || 0).toFixed(2)})</small></span>`;
+    match = `<span class="muted">${isArtist
+      ? `Künstlerbild: ${esc(a.entry.release_artist || a.artist)}`
+      : `MusicBrainz: ${esc(a.entry.release_title || a.album)}${a.entry.year ? " · " + esc(a.entry.year) : ""} <small>(${Number(a.entry.score || 0).toFixed(2)})`}</span>`;
   else if (done) match = `<span class="muted">${esc((a.entry && a.entry.note) || "kein Treffer")}</span>`;
   else match = `<span class="muted">noch nicht gesucht</span>`;
   return `<div class="en-row">
     ${art}
     <div class="en-info">
-      <b>${esc(a.album)}</b> <span class="muted">— ${esc(a.artist)} · ${a.tracks} Titel</span>
+      <b>${esc(label)}</b> <span class="muted">— ${isArtist ? `Künstlerbild · ${a.tracks} Titel ohne Album` : `${esc(a.artist)} · ${a.tracks} Titel`}</span>
       <div>${match}</div>
     </div>
     <div class="en-actions">
@@ -2535,7 +2610,7 @@ $("enrich-scan").addEventListener("click", async () => {
     : "Keine Alben ohne Cover mehr zu suchen.";
   for (let i = 0; i < todo.length; i++) {
     if (enrichStop) break;
-    $("enrich-progress").textContent = `Suche ${i + 1}/${todo.length}: ${todo[i].album}`;
+    $("enrich-progress").textContent = `Suche ${i + 1}/${todo.length}: ${todo[i].album || todo[i].artist}`;
     await doEnrichLookup(enrichAlbums.indexOf(todo[i]));
     await new Promise((r) => setTimeout(r, 1200)); // server paces anyway; keep UI calm
   }
@@ -2548,7 +2623,7 @@ $("enrich-scan").addEventListener("click", async () => {
 $("enrich-stop").addEventListener("click", () => { enrichStop = true; });
 
 $("enrich-apply").addEventListener("click", async () => {
-  const keys = enrichAlbums.filter((a) => a.selected && a.entry && a.entry.art_b64).map((a) => a.key);
+  const keys = enrichAlbums.filter((a) => a.selected && enrichEntryArt(a)).map((a) => a.key);
   if (!keys.length) return toast("Kein Cover ausgewählt", true);
   if (!confirm(`Cover in ${keys.length} Album(e) in die Dateien einbetten (Jahr wird mitgeschrieben)?`)) return;
   const btn = $("enrich-apply");
@@ -2576,7 +2651,7 @@ $("enrich-list").addEventListener("change", (e) => {
   const c = e.target.closest("[data-en-sel]");
   if (!c) return;
   enrichAlbums[Number(c.dataset.enSel)].selected = c.checked;
-  const n = enrichAlbums.filter((a) => a.selected && a.entry && a.entry.art_b64).length;
+  const n = enrichAlbums.filter((a) => a.selected && enrichEntryArt(a)).length;
   $("enrich-apply").classList.toggle("hidden", n === 0);
 });
 

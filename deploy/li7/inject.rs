@@ -82,6 +82,16 @@ const SIDECAR: &str = r#"
                   name: moaic-aria-web-token
                   key: ARIA_WEB_TOKEN
                   optional: true
+            # The /dl/mcp bearer — the brain's MCP client presents the SAME
+            # value (MOAIC_MCP_ADAPTER_AUTH, the secret rides the brain's
+            # env from the tessera). optional = missing secret → empty
+            # token → the endpoint stays closed (401 for everything).
+            - name: ARIA_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: moaic-mcp-adapter-auth
+                  key: MOAIC_MCP_ADAPTER_AUTH
+                  optional: true
             # The brain's JWT signing secret — the web login verifies the
             # brain's /api/auth/login tokens (HS256) locally, so one
             # credential system covers voice + web (same as bible).
