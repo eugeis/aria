@@ -1308,25 +1308,29 @@ async function loadLibrary() {
 // generated gradient tile (name-derived, always available offline). ──────
 function tileColor(seed) {
   let h = 0;
-  for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  for (const c of String(seed ?? "")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   const hue = h % 360;
   const hue2 = (hue + 40 + (h % 50)) % 360;
   return `linear-gradient(135deg, hsl(${hue} 45% 30%), hsl(${hue2} 55% 18%))`;
 }
 
 function artImgHtml(name, srcs) {
-  // srcs: ordered candidate URLs; the last "src" is the tile sentinel.
-  let chain = srcs
-    .map((u, i) => {
-      const next =
-        i + 1 < srcs.length
-          ? `this.src=${JSON.stringify(srcs[i + 1])}`
-          : `tileify(this, ${JSON.stringify(name)})`;
-      return `onerror="this.onerror=null;${next}"`;
-    })
-    .join(" ");
-  const first = srcs.length ? srcs[0] : "data:,";
-  return `<img class="card-art" loading="lazy" src="${first}" ${chain} alt="">`;
+  // srcs: ordered candidate URLs; the last failure falls to the tile.
+  // Chain + name ride in an esc()-escaped data attribute walked by a single
+  // onerror: an inline handler cannot carry arbitrary strings (a quote in a
+  // title truncates the attribute → SyntaxError), and duplicate onerror
+  // attributes are dropped by the HTML parser.
+  const first = srcs.length ? esc(srcs[0]) : "data:,";
+  return `<img class="card-art" loading="lazy" src="${first}" data-art="${esc(JSON.stringify({ n: name, s: srcs }))}" onerror="artFall(this)" alt="">`;
+}
+
+function artFall(img) {
+  let d;
+  try { d = JSON.parse(img.getAttribute("data-art") || "{}"); } catch (e) { d = { n: "", s: [] }; }
+  const s = Array.isArray(d.s) ? d.s : [];
+  const step = (img.__artStep = (img.__artStep || -1) + 1);
+  if (step < s.length - 1) img.src = s[step + 1];
+  else tileify(img, d.n);
 }
 
 function tileify(img, name) {
