@@ -12,7 +12,7 @@ env:
   # the MCP-client env-bound bearer auth (`app.mcp.servers[].auth_env` —
   # needed to consume the bible app's protected /mcp) + the workflow agent
   # node's `system` prompt prop (the voice persona).
-  MOSAIC_REV: f79136bd68682d75f1e38b111392fee64ea9c245
+  MOSAIC_REV: 160e00bfebd42ea5ea7de3dd5a59164945a8d1fe
 
 jobs:
   brain:

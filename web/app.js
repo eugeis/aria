@@ -158,7 +158,8 @@ async function flushSynclog() {
   }
   if (replayed) {
     toast(`${replayed} Offline-Änderung${replayed === 1 ? "" : "en"} gesendet.`);
-    renderQueue(await api("/dl/queue").catch(() => ({ items: [] })));
+    const q = await api("/dl/queue").catch(() => ({ items: [] }));
+    renderQueue(q.items || []);
     loadPlaylists();
   }
   updateSyncBadge();
@@ -999,7 +1000,8 @@ async function boot() {
   loadPlaylists();
   refreshCookiesBadge();
   refreshCookiesStatus();
-  renderQueue(await api("/dl/queue").catch(() => ({ items: [] })));
+  const q0 = await api("/dl/queue").catch(() => ({ items: [] }));
+  renderQueue(q0.items || []);
   renderOffline();
   startQueuePolling();
   refreshEnrichBadge();
