@@ -1909,6 +1909,23 @@ function promptPlaylist(hint) {
 
 // ── search ────────────────────────────────────────────────────────────────
 
+// One library track row (play + playlist via the global data-act
+// dispatcher, keyed by track id — the search's endless pages and the
+// album track list share this renderer).
+function trackRowHtml(t) {
+  return `
+  <div class="t-row">
+    <span class="t-no">${t.track_no ? esc(String(t.track_no).padStart(2, "0")) : ""}</span>
+    <span class="t-title" title="${esc(t.title)}">${esc(t.title)}</span>
+    <span class="t-meta muted">${esc(t.artist)}${t.album ? ` · ${esc(t.album)}` : ""}</span>
+    <span class="t-dur">${fmtDur(Math.round((t.duration_ms || 0) / 1000))}</span>
+    <span class="t-actions">
+      <button class="act" data-act="play" data-id="${t.id}" title="Abspielen">▶</button>
+      <button class="act" data-act="pladd" data-id="${t.id}" title="Zur Playlist">＋</button>
+    </span>
+  </div>`;
+}
+
 $("search-mode").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-mode]");
   if (!b) return;
@@ -1918,7 +1935,67 @@ $("search-mode").addEventListener("click", (e) => {
   $("search-n").style.visibility = searchMode === "youtube" ? "visible" : "hidden";
 });
 
+// Endless search: pages of SEARCH_PAGE rows (the backend's old hard cap
+// was 50); `searchTotal`/`searchCursor` track where the client is.
+const SEARCH_PAGE = 100;
+let searchTotal = 0;
+let searchCursor = 0;
+let searchLoading = false;
+let searchObserver = null;
+
+function searchSentinel(loading) {
+  return `<div id="search-more" class="muted" style="padding:10px 0">${loading ? "Lade weitere Treffer …" : "Weiterscrollen lädt mehr …"}</div>`;
+}
+
+function armSearchObserver() {
+  if (searchObserver) searchObserver.disconnect();
+  const el = $("search-more");
+  if (!el) return;
+  searchObserver = new IntersectionObserver(
+    (entries) => { if (entries.some((e) => e.isIntersecting)) loadMoreSearch(); },
+    { rootMargin: "600px" }
+  );
+  searchObserver.observe(el);
+}
+
+async function loadMoreSearch() {
+  if (searchLoading || searchMode !== "library") return;
+  if (searchCursor >= searchTotal) return;
+  const q = $("search-q").value.trim();
+  if (!q) return;
+  searchLoading = true;
+  const el = $("search-more");
+  if (el) el.textContent = "Lade weitere Treffer …";
+  try {
+    const r = await api(`/dl/library/search?q=${encodeURIComponent(q)}&limit=${SEARCH_PAGE}&offset=${searchCursor}`);
+    const more = (r.tracks || []).map((t) => ({ ...t, _kind: "track" }));
+    searchHits.push(...more);
+    searchTotal = typeof r.total === "number" ? r.total : searchTotal;
+    searchCursor += more.length;
+    if (el) {
+      if (more.length && searchCursor < searchTotal) {
+        el.textContent = `${searchCursor} von ${searchTotal} Treffern — weiterscrollen lädt mehr …`;
+      } else {
+        el.textContent = searchTotal ? `Alle ${searchTotal} Treffer geladen.` : "";
+        if (searchObserver) searchObserver.disconnect();
+      }
+    }
+    // Append the rows before the sentinel (ids keep the row actions sane).
+    if (more.length && el) {
+      el.insertAdjacentHTML(
+        "beforebegin",
+        more.map((t) => trackRowHtml(t)).join("")
+      );
+    }
+  } catch (err) {
+    if (el) el.textContent = `Weitere Treffer nicht geladen: ${err.message}`;
+  } finally {
+    searchLoading = false;
+  }
+}
+
 async function doSearch() {
+  if (searchObserver) searchObserver.disconnect();
   const q = $("search-q").value.trim();
   if (!q) {
     $("search-results").innerHTML = `<p class="muted">Tippe oben in die Suchleiste — Titel, Künstler oder Album, z. B. „Oceans“.</p>`;
@@ -1928,14 +2005,20 @@ async function doSearch() {
   box.innerHTML = `<p class="muted">Suche läuft …</p>`;
   try {
     if (searchMode === "library") {
-      const r = await api(`/dl/library/search?q=${encodeURIComponent(q)}`);
+      const r = await api(`/dl/library/search?q=${encodeURIComponent(q)}&limit=${SEARCH_PAGE}&offset=0`);
       searchHits = (r.tracks || []).map((t) => ({ ...t, _kind: "track" }));
-      box.innerHTML =
-        searchHits.length === 0
-          ? `<p class="muted">Nichts gefunden.</p>`
-          : searchHits
-              .map((t, i) => trackRowHtml(t))
-              .join("");
+      searchTotal = typeof r.total === "number" ? r.total : searchHits.length;
+      searchCursor = searchHits.length;
+      if (!searchHits.length) {
+        box.innerHTML = `<p class="muted">Nichts gefunden.</p>`;
+      } else {
+        box.innerHTML =
+          searchHits.map((t) => trackRowHtml(t)).join("") +
+          (searchCursor < searchTotal
+            ? searchSentinel(false)
+            : `<div id="search-more" class="muted" style="padding:10px 0">Alle ${searchTotal} Treffer geladen.</div>`);
+        if (searchCursor < searchTotal) armSearchObserver();
+      }
     } else {
       const r = await api(`/dl/search?q=${encodeURIComponent(q)}&n=${$("search-n").value}`);
       searchHits = (r.hits || []).map((h) => ({ ...h, _kind: "youtube" }));

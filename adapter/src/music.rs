@@ -232,10 +232,17 @@ struct SearchQuery {
     /// Optional collection filter (name, case-insensitive).
     #[serde(default)]
     collection: Option<String>,
+    /// Page size (default 50 — the legacy contract; capped at 1000).
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Zero-based offset for paging (the search view's endless scroll).
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 /// Instant, deterministic library search (title/artist/album substring,
-/// no LLM): score = title hits > artist hits > album hits; top 50.
+/// no LLM): score = title hits > artist hits > album hits; paged
+/// (limit/offset, `total` in the answer) — the old hard cap was 50.
 async fn handle_library_search(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -279,8 +286,13 @@ async fn handle_library_search(
         scored.push((score, track_view(t)));
     }
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.title.cmp(&a.1.title)));
-    let tracks: Vec<TrackView> = scored.into_iter().take(50).map(|(_, v)| v).collect();
-    Json(serde_json::json!({"ok": true, "tracks": tracks})).into_response()
+    // Paged (the old hard cap was 50 — the library search UI loads
+    // endless pages of 100; `total` tells the client when it is done).
+    let limit = q.limit.unwrap_or(50).clamp(1, 1000);
+    let offset = q.offset.unwrap_or(0);
+    let total = scored.len();
+    let tracks: Vec<TrackView> = scored.into_iter().skip(offset).take(limit).map(|(_, v)| v).collect();
+    Json(serde_json::json!({"ok": true, "total": total, "offset": offset, "limit": limit, "tracks": tracks})).into_response()
 }
 
 // ---------------------------------------------------------------------------
