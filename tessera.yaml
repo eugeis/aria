@@ -126,6 +126,16 @@ app:
   # intent; the voice workflows name their collection explicitly.
   assistant:
     route: auto
+    # ADR 0183: the in-page floating bubble (Eezy) — the assistant is
+    # reachable from inside the app's pages (home/library/search), not
+    # only /ask. Agent mode runs the full tool agent (knowledge +
+    # resource + MCP, incl. the adapter's YouTube tools) over the same
+    # /api/aide/chat surface — the "download popular AI songs like this"
+    # flow works from any page.
+    widget:
+      title: "Aria"
+      greeting: 'Hallo! Frag mich nach Musik, Alben, Predigten oder Playlists — oder sag z. B.: „Lade 5 beliebte AI-generierte Lieder von YouTube herunter“.'
+      agent_mode: true
   # ADR 0023 app-level env (flows to the k8s deployment, NOT the local e2e).
   # On li7: /data = the knowledge base (the scan output, the sermon scripts,
   # the ADR 0100 persist seam, the embedded sqlite) on an ext4 hostPath;
