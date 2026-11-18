@@ -13,6 +13,18 @@ let searchMode = "library";
 let searchHits = [];         // current result rows (playable or youtube)
 let queueTimer = null;
 
+// ── service worker: proactive update check ─────────────────────────────────
+// The rendered sw.js carries a per-deploy VERSION stamp (deploy/stamp-sw.sh),
+// so forcing a check on each load finds new bytes and lets the new worker take
+// over (it skipWaiting + clients.claim). This makes a deploy reach the client
+// on the next navigation instead of waiting for the browser's throttled
+// (~24h) automatic SW update check. No auto-reload: the current page keeps
+// running its own code until the user's next load, which then gets the fresh
+// shell from the updated worker.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistration().then((reg) => reg && reg.update()).catch(() => {});
+}
+
 // ── player ────────────────────────────────────────────────────────────────
 // Transport semantics follow spotifast (sync/spotifast.md L1): repeat is
 // off | context | track; picking another song BY HAND auto-drops
