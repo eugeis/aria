@@ -2056,6 +2056,10 @@ async function doSearch() {
   box.innerHTML = `<p class="muted">Suche läuft …</p>`;
   $("yt-targets").classList.add("hidden");
   $("yt-add").disabled = true;
+  const _all = $("yt-check-all");
+  if (_all) { _all.checked = false; _all.indeterminate = false; }
+  const _mk = $("yt-marked");
+  if (_mk) _mk.textContent = "";
   try {
     if (searchMode === "library") {
       const r = await api(`/dl/library/search?q=${encodeURIComponent(q)}&limit=${SEARCH_PAGE}&offset=0`);
@@ -2114,33 +2118,54 @@ async function doYtImport() {
   const url = $("yt-url").value.trim();
   if (!/^https?:\/\//i.test(url)) return toast("Bitte eine YouTube-URL einfügen (https://…)", true);
   const sort = $("yt-sort").value;
+  const mv = parseInt($("yt-min-views").value, 10) || 0;
   MosaicRouter.go("/search");
   const box = $("search-results");
   const btn = $("yt-import-btn");
   btn.disabled = true;
   box.innerHTML = `<p class="muted">Lade Kanal/Playlist … (alle Videos, kann ~10 s dauern)</p>`;
   try {
-    const r = await api(`/dl/playlist?url=${encodeURIComponent(url)}&sort=${encodeURIComponent(sort)}`);
+    let q = `/dl/playlist?url=${encodeURIComponent(url)}&sort=${encodeURIComponent(sort)}`;
+    if (mv > 0) q += `&min_views=${mv}`;
+    const r = await api(q);
     if (!r.ok) throw new Error(r.error || "Fehler beim Laden");
     searchHits = (r.hits || []).map((h) => ({ ...h, _kind: "youtube" }));
     const sortLabel =
       { popular: "Beliebte (meiste Views)", latest: "Neueste zuerst", default: "Standard", oldest: "Älteste zuerst" }[r.sort || sort] ||
       r.sort ||
       sort;
-    const head = `<div class="muted" style="padding:2px 0"><b>${esc(r.channel || r.title)}</b> — ${searchHits.length} Videos · ${esc(sortLabel)}</div>`;
+    const total = typeof r.total === "number" ? r.total : searchHits.length;
+    const ofTotal = total !== searchHits.length ? ` von ${total}` : "";
+    const minTxt = mv > 0 ? ` · ≥ ${fmtViews(mv)} Views` : "";
+    const head = `<div class="muted" style="padding:2px 0"><b>${esc(r.channel || r.title)}</b> — ${searchHits.length}${ofTotal} Videos · ${esc(sortLabel)}${minTxt}</div>`;
     box.innerHTML =
       searchHits.length === 0
         ? `<p class="muted">Keine Videos gefunden.</p>`
         : head + searchHits.map((h, i) => ytImportRow(h, i)).join("");
     $("yt-targets").classList.remove("hidden");
-    $("yt-add").disabled = false;
     if (!$("yt-artist").value && r.channel) $("yt-artist").value = r.channel;
     if (!$("yt-album").value && r.title && r.title !== url) $("yt-album").value = r.title;
+    updateYtMarked();
   } catch (err) {
     box.innerHTML = `<p class="error">${esc(err.message)}</p>`;
   } finally {
     btn.disabled = false;
   }
+}
+
+function updateYtMarked() {
+  const checks = [...document.querySelectorAll("#search-results .hit-check")];
+  const n = checks.filter((c) => c.checked).length;
+  const total = checks.length;
+  const marked = $("yt-marked");
+  if (marked) marked.textContent = total ? `${n}/${total}` : "";
+  const all = $("yt-check-all");
+  if (all) {
+    all.checked = total > 0 && n === total;
+    all.indeterminate = n > 0 && n < total;
+  }
+  const add = $("yt-add");
+  if (add) add.disabled = n === 0;
 }
 
 function ytImportRow(h, i) {
@@ -2168,6 +2193,14 @@ function fmtViews(n) {
 
 $("yt-import-btn").addEventListener("click", doYtImport);
 $("yt-url").addEventListener("keydown", (e) => e.key === "Enter" && doYtImport());
+$("yt-check-all").addEventListener("change", () => {
+  const on = $("yt-check-all").checked;
+  document.querySelectorAll("#search-results .hit-check").forEach((c) => (c.checked = on));
+  updateYtMarked();
+});
+$("search-results").addEventListener("change", (e) => {
+  if (e.target && e.target.classList && e.target.classList.contains("hit-check")) updateYtMarked();
+});
 
 async function loadCollections() {
   const q = await api("/dl/queue").catch(() => ({ collections: [] }));

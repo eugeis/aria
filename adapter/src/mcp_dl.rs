@@ -51,6 +51,9 @@ struct YtPlaylistArgs {
     /// playlists.
     #[serde(default)]
     sort: Option<String>,
+    /// Keep only videos with at least this many views (e.g. 10000).
+    #[serde(default)]
+    min_views: Option<u64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -96,18 +99,19 @@ impl AdapterMcp {
         }
     }
 
-    #[tool(description = "Read a YouTube playlist or channel URL: title, channel, and the video list (id, title, channel, duration, url, view_count). For a CHANNEL, pass `sort` to order the videos: 'popular' = most-viewed first (use this for 'popular songs' — YouTube removed the ?sort=p URL, so this is how you get them), 'latest'/'default' = newest first, 'oldest' = oldest first. Playlists have a fixed order (sort ignored). Then queue the wanted videos with yt_download (use the channel/playlist name as the album tag).")]
+    #[tool(description = "Read a YouTube playlist or channel URL: title, channel, total, and the video list (id, title, channel, duration, url, view_count). For a CHANNEL, pass `sort` to order the videos: 'popular' = most-viewed first (use this for 'popular songs' — YouTube removed the ?sort=p URL, so this is how you get them), 'latest'/'default' = newest first, 'oldest' = oldest first. Pass `min_views` (e.g. 10000) to keep only videos with at least that many views. Playlists have a fixed order (sort ignored, min_views still applies). Then queue the wanted videos with yt_download (use the channel/playlist name as the album tag).")]
     async fn yt_playlist(&self, Parameters(a): Parameters<YtPlaylistArgs>) -> Json<Value> {
         let url = a.url.trim();
         if !url.starts_with("http") {
             return Json(json!({ "error": "url must start with http(s)" }));
         }
         let sort = crate::web::YtSort::parse(a.sort.as_deref().unwrap_or("default"));
-        match crate::web::yt_playlist_sorted(&self.state.cfg, url, sort).await {
-            Ok((title, channel, hits)) => Json(json!({
+        match crate::web::yt_playlist_sorted(&self.state.cfg, url, sort, a.min_views).await {
+            Ok((title, channel, total, hits)) => Json(json!({
                 "title": title,
                 "channel": channel,
                 "sort": sort.label(),
+                "total": total,
                 "hits": hits,
             })),
             Err(e) => Json(json!({ "error": e })),

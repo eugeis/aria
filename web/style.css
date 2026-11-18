@@ -130,8 +130,11 @@ button.ghost.danger { color: var(--err); border-color: #5a3030; }
   padding: 10px 14px;
   margin-bottom: 14px;
 }
-.yt-import input { flex: 1; min-width: 220px; }
+.yt-import input#yt-url { flex: 1; min-width: 220px; }
+.yt-import input#yt-min-views { width: 120px; flex: none; }
 .yt-import select { min-width: 110px; }
+.targets label.yt-checkall { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
+.yt-marked { font-size: 13px; color: var(--muted); align-self: center; min-width: 64px; }
 
 .pl-title { margin: 0 0 10px; }
 

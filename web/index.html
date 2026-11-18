@@ -271,9 +271,12 @@
           <option value="default">Standard</option>
           <option value="oldest">Älteste</option>
         </select>
+        <input id="yt-min-views" type="number" min="0" step="1" inputmode="numeric" placeholder="Min. Views" title="Nur Videos mit mindestens so vielen Views (leer = alle)">
         <button id="yt-import-btn" title="Videos des Kanals / der Playlist laden">Laden</button>
       </div>
       <div id="yt-targets" class="targets hidden">
+        <label class="yt-checkall"><input id="yt-check-all" type="checkbox"> Alle</label>
+        <span id="yt-marked" class="muted yt-marked"></span>
         <label>Künstler <input id="yt-artist" type="text" placeholder="Künstler/Band"></label>
         <label>Album <input id="yt-album" type="text" placeholder="Album"></label>
         <label>Sammlung <select id="yt-collection"></select></label>

@@ -634,13 +634,16 @@ impl YtSort {
     }
 }
 
-/// Fetch a YouTube playlist/channel flat list and apply the requested order:
-/// Default/Latest as returned, Oldest reversed, Popular by view_count desc.
+/// Fetch a YouTube playlist/channel flat list, order it (Default/Latest as
+/// returned, Oldest reversed, Popular by view_count desc), then keep only
+/// videos with at least `min_views` views. Returns (title, channel,
+/// total_before_filter, ordered+filtered hits).
 pub(crate) async fn yt_playlist_sorted(
     cfg: &Config,
     url: &str,
     sort: YtSort,
-) -> Result<(String, Option<String>, Vec<Hit>), String> {
+    min_views: Option<u64>,
+) -> Result<(String, Option<String>, usize, Vec<Hit>), String> {
     let v = yt_flat_json(cfg, url).await?;
     let title = v
         .get("title")
@@ -653,6 +656,7 @@ pub(crate) async fn yt_playlist_sorted(
         .and_then(|c| c.as_str())
         .map(|s| s.to_string());
     let mut hits = hits_from_entries(&v);
+    let total = hits.len();
     match sort {
         YtSort::Popular => {
             hits.sort_by(|a, b| b.view_count.unwrap_or(0).cmp(&a.view_count.unwrap_or(0)));
@@ -660,7 +664,12 @@ pub(crate) async fn yt_playlist_sorted(
         YtSort::Oldest => hits.reverse(),
         YtSort::Default | YtSort::Latest => {}
     }
-    Ok((title, channel, hits))
+    if let Some(mv) = min_views {
+        if mv > 0 {
+            hits.retain(|h| h.view_count.unwrap_or(0) >= mv);
+        }
+    }
+    Ok((title, channel, total, hits))
 }
 
 #[derive(Deserialize)]
@@ -668,6 +677,8 @@ struct PlaylistQuery {
     url: String,
     #[serde(default)]
     sort: String,
+    #[serde(default)]
+    min_views: Option<u64>,
 }
 
 async fn handle_playlist(
@@ -687,12 +698,14 @@ async fn handle_playlist(
             .into_response();
     }
     let sort = YtSort::parse(&q.sort);
-    match yt_playlist_sorted(&state.cfg, url, sort).await {
-        Ok((title, channel, hits)) => Json(serde_json::json!({
+    match yt_playlist_sorted(&state.cfg, url, sort, q.min_views).await {
+        Ok((title, channel, total, hits)) => Json(serde_json::json!({
             "ok": true,
             "title": title,
             "channel": channel,
             "sort": sort.label(),
+            "total": total,
+            "min_views": q.min_views,
             "hits": hits,
         }))
         .into_response(),
