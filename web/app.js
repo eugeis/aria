@@ -25,6 +25,45 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.getRegistration().then((reg) => reg && reg.update()).catch(() => {});
 }
 
+// ── build badge + app reload ──────────────────────────────────────────────
+// /version.json is embedded in the RUNNING binary (stamped per deploy by
+// deploy/stamp-version.sh), so the badge shows exactly what this browser is
+// executing — the aria commit, the mosaic revision that rendered it, and the
+// build time. The reload button is the no-DevTools escape hatch for a stuck
+// shell: it drops every service worker + cache, then reloads from the network
+// (a unique query param defeats any remaining HTTP-cache copy of the document).
+(async function showBuildBadge() {
+  try {
+    const r = await fetch("/version.json", { cache: "no-store" });
+    const v = await r.json();
+    const el = $("build-badge");
+    if (!el || !v || !v.aria) return;
+    const aria = String(v.aria).slice(0, 7);
+    const mosaic = String(v.mosaic).slice(0, 7);
+    const d = new Date(v.built);
+    const ts = isNaN(d) ? "" :
+      " · " + d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) +
+      " " + d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+    el.querySelector(".bb-full").textContent = `aria ${aria} · mosaic ${mosaic}${ts}`;
+    el.querySelector(".bb-short").textContent = `aria ${aria}`;
+    el.title = `aria    ${v.aria}\nmosaic  ${v.mosaic}\nbuilt   ${v.built}`;
+  } catch (e) {}
+})();
+
+$("btn-app-reload").addEventListener("click", async () => {
+  try {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((reg) => reg.unregister()));
+    }
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch (e) {}
+  location.href = location.pathname + "?fresh=" + Date.now();
+});
+
 // ── player ────────────────────────────────────────────────────────────────
 // Transport semantics follow spotifast (sync/spotifast.md L1): repeat is
 // off | context | track; picking another song BY HAND auto-drops

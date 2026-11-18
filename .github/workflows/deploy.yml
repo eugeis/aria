@@ -49,7 +49,7 @@ env:
   CARGO_TERM_COLOR: always
   KUBECONFIG: /home/ee/.kube/config
   # Keep in lockstep with .github/workflows/ci.yml (the pinned generator).
-  MOSAIC_REV: a680861ebc86eb3a57421e3830e51613a921018a
+  MOSAIC_REV: 640951738c83ddb95d04fe0d41ea4ed4ef2b298c
   NAMESPACE: aria
   RELEASE: aria
   HOST: aria.eisler-systems.de
