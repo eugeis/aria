@@ -578,7 +578,7 @@ async fn handle_search(
         )
             .into_response();
     }
-    let n = q.n.clamp(1, 50);
+    let n = q.n.clamp(1, 200);
     let target = format!("ytsearch{n}:{query}");
     match yt_flat_json(&state.cfg, &target).await {
         Ok(v) => Json(serde_json::json!({
