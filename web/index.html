@@ -263,6 +263,16 @@
 
     <!-- SEARCH RESULTS -->
     <section id="view-search" class="view">
+      <div class="yt-import">
+        <input id="yt-url" type="url" placeholder="Kanal- oder Playlist-URL laden, z. B. https://www.youtube.com/@NAME/videos" spellcheck="false" autocomplete="off">
+        <select id="yt-sort" title="Sortierung (Kanal: YouTube entfernt die ?sort=URL — wird hier angewendet)">
+          <option value="popular" selected>Beliebt</option>
+          <option value="latest">Neueste</option>
+          <option value="default">Standard</option>
+          <option value="oldest">Älteste</option>
+        </select>
+        <button id="yt-import-btn" title="Videos des Kanals / der Playlist laden">Laden</button>
+      </div>
       <div id="yt-targets" class="targets hidden">
         <label>Künstler <input id="yt-artist" type="text" placeholder="Künstler/Band"></label>
         <label>Album <input id="yt-album" type="text" placeholder="Album"></label>

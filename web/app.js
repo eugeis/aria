@@ -2054,6 +2054,8 @@ async function doSearch() {
   }
   const box = $("search-results");
   box.innerHTML = `<p class="muted">Suche läuft …</p>`;
+  $("yt-targets").classList.add("hidden");
+  $("yt-add").disabled = true;
   try {
     if (searchMode === "library") {
       const r = await api(`/dl/library/search?q=${encodeURIComponent(q)}&limit=${SEARCH_PAGE}&offset=0`);
@@ -2104,6 +2106,68 @@ $("search-q").addEventListener("focus", () => MosaicRouter.go("/search"));
 $("search-mode").addEventListener("click", (e) => {
   if (e.target.closest("button[data-mode]")) MosaicRouter.go("/search");
 });
+
+// ── channel / playlist import by URL (sort applied server-side) ─────────
+// YouTube removed the ?sort=p URL param, so "Beliebt/Neueste/Älteste" is
+// chosen here and the adapter orders yt-dlp's flat list accordingly.
+async function doYtImport() {
+  const url = $("yt-url").value.trim();
+  if (!/^https?:\/\//i.test(url)) return toast("Bitte eine YouTube-URL einfügen (https://…)", true);
+  const sort = $("yt-sort").value;
+  MosaicRouter.go("/search");
+  const box = $("search-results");
+  const btn = $("yt-import-btn");
+  btn.disabled = true;
+  box.innerHTML = `<p class="muted">Lade Kanal/Playlist … (alle Videos, kann ~10 s dauern)</p>`;
+  try {
+    const r = await api(`/dl/playlist?url=${encodeURIComponent(url)}&sort=${encodeURIComponent(sort)}`);
+    if (!r.ok) throw new Error(r.error || "Fehler beim Laden");
+    searchHits = (r.hits || []).map((h) => ({ ...h, _kind: "youtube" }));
+    const sortLabel =
+      { popular: "Beliebte (meiste Views)", latest: "Neueste zuerst", default: "Standard", oldest: "Älteste zuerst" }[r.sort || sort] ||
+      r.sort ||
+      sort;
+    const head = `<div class="muted" style="padding:2px 0"><b>${esc(r.channel || r.title)}</b> — ${searchHits.length} Videos · ${esc(sortLabel)}</div>`;
+    box.innerHTML =
+      searchHits.length === 0
+        ? `<p class="muted">Keine Videos gefunden.</p>`
+        : head + searchHits.map((h, i) => ytImportRow(h, i)).join("");
+    $("yt-targets").classList.remove("hidden");
+    $("yt-add").disabled = false;
+    if (!$("yt-artist").value && r.channel) $("yt-artist").value = r.channel;
+    if (!$("yt-album").value && r.title && r.title !== url) $("yt-album").value = r.title;
+  } catch (err) {
+    box.innerHTML = `<p class="error">${esc(err.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function ytImportRow(h, i) {
+  const meta = [esc(h.channel || ""), h.view_count != null ? `${fmtViews(h.view_count)} Views` : ""].filter(Boolean).join(" · ");
+  const metaTitle = h.view_count != null ? `${h.channel || ""} — ${h.view_count} Views` : h.channel || "";
+  return `
+  <div class="t-row">
+    <span class="t-no"><input class="hit-check" type="checkbox" data-i="${i}" title="Markieren"></span>
+    <span class="t-title" title="${esc(h.title)}">${esc(h.title)}</span>
+    <span class="t-meta muted" title="${esc(metaTitle)}">${meta}</span>
+    <span class="t-dur">${fmtDur(h.duration)}</span>
+    <span class="t-actions">
+      <button class="act" data-act="yt-dl" data-i="${i}" title="Herunterladen">⬇</button>
+      <select class="pl-select" id="yt-pl-${i}" title="Zur Playlist">${playlistSelectHtml()}</select>
+      <button class="act" data-act="yt-pl" data-i="${i}">＋</button>
+    </span>
+  </div>`;
+}
+
+function fmtViews(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + " M";
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "") + " k";
+  return String(n);
+}
+
+$("yt-import-btn").addEventListener("click", doYtImport);
+$("yt-url").addEventListener("keydown", (e) => e.key === "Enter" && doYtImport());
 
 async function loadCollections() {
   const q = await api("/dl/queue").catch(() => ({ collections: [] }));

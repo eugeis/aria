@@ -481,6 +481,10 @@ pub(crate) struct Hit {
     duration: Option<u32>,
     channel: Option<String>,
     url: String,
+    /// View count (present for channel /videos + search flat entries; the
+    /// "popular" sort orders by this).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    view_count: Option<u64>,
 }
 
 fn str_of(v: &Value, key: &str) -> Option<String> {
@@ -502,6 +506,7 @@ fn entry_to_hit(v: &Value) -> Hit {
         duration: None,
         channel: None,
         url: String::new(),
+        view_count: None,
     })
 }
 
@@ -515,12 +520,14 @@ fn entry_to_hit_opt(v: &Value) -> Option<Hit> {
         .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={id}"));
     let duration = v.get("duration").and_then(|d| d.as_f64()).map(|d| d as u32);
     let channel = str_of(v, "channel").or_else(|| str_of(v, "uploader"));
+    let view_count = v.get("view_count").and_then(|c| c.as_u64());
     Some(Hit {
         id,
         title: str_of(v, "title").unwrap_or_default(),
         duration,
         channel,
         url,
+        view_count,
     })
 }
 
@@ -595,9 +602,72 @@ async fn handle_search(
     }
 }
 
+/// Sort order for a YouTube channel/playlist import. YouTube removed the
+/// `?sort=p` URL param, so ordering is applied here after yt-dlp's flat fetch
+/// (a channel's /videos tab is newest-first and each flat entry carries
+/// `view_count`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum YtSort {
+    Default,
+    Latest,
+    Popular,
+    Oldest,
+}
+
+impl YtSort {
+    pub(crate) fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "popular" | "best" | "top" => Self::Popular,
+            "oldest" => Self::Oldest,
+            "latest" | "newest" => Self::Latest,
+            _ => Self::Default,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Latest => "latest",
+            Self::Popular => "popular",
+            Self::Oldest => "oldest",
+        }
+    }
+}
+
+/// Fetch a YouTube playlist/channel flat list and apply the requested order:
+/// Default/Latest as returned, Oldest reversed, Popular by view_count desc.
+pub(crate) async fn yt_playlist_sorted(
+    cfg: &Config,
+    url: &str,
+    sort: YtSort,
+) -> Result<(String, Option<String>, Vec<Hit>), String> {
+    let v = yt_flat_json(cfg, url).await?;
+    let title = v
+        .get("title")
+        .and_then(|t| t.as_str())
+        .unwrap_or(url)
+        .to_string();
+    let channel = v
+        .get("channel")
+        .or_else(|| v.get("uploader"))
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+    let mut hits = hits_from_entries(&v);
+    match sort {
+        YtSort::Popular => {
+            hits.sort_by(|a, b| b.view_count.unwrap_or(0).cmp(&a.view_count.unwrap_or(0)));
+        }
+        YtSort::Oldest => hits.reverse(),
+        YtSort::Default | YtSort::Latest => {}
+    }
+    Ok((title, channel, hits))
+}
+
 #[derive(Deserialize)]
 struct PlaylistQuery {
     url: String,
+    #[serde(default)]
+    sort: String,
 }
 
 async fn handle_playlist(
@@ -616,21 +686,16 @@ async fn handle_playlist(
         )
             .into_response();
     }
-    match yt_flat_json(&state.cfg, url).await {
-        Ok(v) => {
-            let channel = v
-                .get("channel")
-                .or_else(|| v.get("uploader"))
-                .and_then(|c| c.as_str())
-                .map(|s| s.to_string());
-            Json(serde_json::json!({
-                "ok": true,
-                "title": v.get("title").and_then(|t| t.as_str()).unwrap_or(url),
-                "channel": channel,
-                "hits": hits_from_entries(&v),
-            }))
-            .into_response()
-        }
+    let sort = YtSort::parse(&q.sort);
+    match yt_playlist_sorted(&state.cfg, url, sort).await {
+        Ok((title, channel, hits)) => Json(serde_json::json!({
+            "ok": true,
+            "title": title,
+            "channel": channel,
+            "sort": sort.label(),
+            "hits": hits,
+        }))
+        .into_response(),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({"ok": false, "error": e})),

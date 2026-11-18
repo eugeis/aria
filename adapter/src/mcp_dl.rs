@@ -46,6 +46,11 @@ struct YtSearchArgs {
 struct YtPlaylistArgs {
     /// The YouTube playlist URL (or a channel's /videos URL).
     url: String,
+    /// Channel sort order: "popular" (most-viewed first), "latest" /
+    /// "default" (newest first), or "oldest". Ignored for fixed-order
+    /// playlists.
+    #[serde(default)]
+    sort: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -91,17 +96,19 @@ impl AdapterMcp {
         }
     }
 
-    #[tool(description = "Read a YouTube playlist (or channel) URL: title, channel, and the video list (id, title, channel, duration, url). Then queue the wanted videos with yt_download (use the playlist title as the album tag).")]
+    #[tool(description = "Read a YouTube playlist or channel URL: title, channel, and the video list (id, title, channel, duration, url, view_count). For a CHANNEL, pass `sort` to order the videos: 'popular' = most-viewed first (use this for 'popular songs' — YouTube removed the ?sort=p URL, so this is how you get them), 'latest'/'default' = newest first, 'oldest' = oldest first. Playlists have a fixed order (sort ignored). Then queue the wanted videos with yt_download (use the channel/playlist name as the album tag).")]
     async fn yt_playlist(&self, Parameters(a): Parameters<YtPlaylistArgs>) -> Json<Value> {
         let url = a.url.trim();
         if !url.starts_with("http") {
             return Json(json!({ "error": "url must start with http(s)" }));
         }
-        match crate::web::yt_flat_json(&self.state.cfg, url).await {
-            Ok(v) => Json(json!({
-                "title": v.get("title").and_then(|t| t.as_str()).unwrap_or(url),
-                "channel": v.get("channel").or_else(|| v.get("uploader")).and_then(|c| c.as_str()).map(String::from),
-                "hits": crate::web::hits_from_entries(&v),
+        let sort = crate::web::YtSort::parse(a.sort.as_deref().unwrap_or("default"));
+        match crate::web::yt_playlist_sorted(&self.state.cfg, url, sort).await {
+            Ok((title, channel, hits)) => Json(json!({
+                "title": title,
+                "channel": channel,
+                "sort": sort.label(),
+                "hits": hits,
             })),
             Err(e) => Json(json!({ "error": e })),
         }
